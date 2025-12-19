@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Query Log Swimlanes</title>
+  <script src="https://cdn.plot.ly/plotly-2.30.0.min.js"></script>
+  <style>
+    :root { --bg:#0b0f17; --panel:#121a27; --text:#e7eefc; --muted:#9fb0d0; --accent:#67a3ff; --danger:#ff5a6a; --border:rgba(231,238,252,0.12); }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, "Apple Color Emoji", "Segoe UI Emoji"; background: linear-gradient(180deg, var(--bg), #060912); color: var(--text); }
+    header { padding:18px 18px 10px; border-bottom:1px solid var(--border); }
+    h1 { margin:0 0 8px; font-size:18px; letter-spacing:0.2px; }
+    .sub { margin:0; color:var(--muted); font-size:13px; line-height:1.4; }
+    main { display:grid; grid-template-columns:360px 1fr; gap:14px; padding:14px; }
+    @media (max-width: 980px) { main { grid-template-columns: 1fr; } }
+    .card { background: rgba(18,26,39,0.92); border:1px solid var(--border); border-radius:16px; padding:14px; box-shadow:0 10px 30px rgba(0,0,0,0.35); overflow:hidden; }
+    .drop { border:2px dashed rgba(103,163,255,0.55); border-radius:14px; padding:16px; background: rgba(103,163,255,0.07); cursor:pointer; transition:120ms ease; }
+    .drop.dragover { transform: translateY(-1px); background: rgba(103,163,255,0.12); border-color: rgba(103,163,255,0.9); }
+    .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+    button { appearance:none; border:1px solid var(--border); background: rgba(231,238,252,0.06); color: var(--text); padding:10px 12px; border-radius:12px; cursor:pointer; font-weight:600; font-size:12px; transition:120ms ease; }
+    button:hover { border-color: rgba(103,163,255,0.6); }
+    button.danger { border-color: rgba(255,90,106,0.45); }
+    button.danger:hover { border-color: rgba(255,90,106,0.9); }
+    .pill { display:inline-flex; gap:8px; align-items:center; padding:8px 10px; border-radius:999px; background: rgba(231,238,252,0.06); border:1px solid var(--border); color: var(--muted); font-size:12px; }
+    .pill b { color: var(--text); }
+    .small { color: var(--muted); font-size:12px; line-height:1.35; margin-top:10px; }
+    .note { padding:10px 12px; border-radius:14px; border:1px solid var(--border); background: rgba(231,238,252,0.04); color: var(--muted); font-size:12px; line-height:1.45; margin-top:10px; }
+    .footer { margin-top:10px; color: var(--muted); font-size:12px; line-height:1.4; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+    .chart { height: calc(100vh - 90px); min-height: 560px; }
+    .toast { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); padding: 10px 12px; border-radius: 999px; border: 1px solid var(--border); background: rgba(18,26,39,0.95); color: var(--text); font-size: 12px; box-shadow: 0 14px 40px rgba(0,0,0,0.45); opacity: 0; pointer-events: none; transition: 160ms ease; }
+    .toast.show { opacity: 1; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Query log swimlanes (Plotly)</h1>
+    <p class="sub">Drop one or more log files (JSONL or text). Hover a bar to see the raw start/end lines. Click a bar to copy the <span class="mono">query</span> to your clipboard.</p>
+  </header>
+
+  <main>
+    <section class="card">
+      <div id="drop" class="drop" tabindex="0" role="button" aria-label="Drop log files">
+        <div class="row" style="justify-content: space-between;">
+          <div>
+            <div style="font-weight:700;">Drop files here</div>
+            <div class="small">or click to pick files</div>
+          </div>
+          <div class="pill"><b id="fileCount">0</b> file(s)</div>
+        </div>
+        <input id="fileInput" type="file" multiple style="display:none" />
+      </div>
+
+      <div class="row" style="margin-top:12px;">
+        <button id="renderBtn">Render</button>
+        <button id="clearBtn" class="danger">Clear</button>
+        <span class="pill">Intervals: <b id="intervalCount">0</b></span>
+      </div>
+
+      <div class="note">
+        <div style="font-weight:700; margin-bottom:6px;">Hardcoded parsing rules</div>
+        <ul style="margin:0; padding-left: 18px;">
+          <li><b>JSONL</b>: timestamp from <span class="mono">time</span>. Start when <span class="mono">event</span> indicates start. End when <span class="mono">event</span> indicates success/failure. Correlation id is <span class="mono">id</span>. Lane label & grouping is <span class="mono">query</span>.</li>
+          <li><b>Text</b>: timestamp parsed from the beginning of the line. Start when line contains <span class="mono">"Query started"</span>. End is the next non-start line. Correlation id extracted from <span class="mono">id:123</span>. Query derived as: take text after <span class="mono">"&gt;"</span>, split by <span class="mono">" - "</span>, take the 3rd element.</li>
+          <li>Failure bars red when end indicates failure (JSON: event contains <span class="mono">fail</span>; text: end line contains fail/error/exception).</li>
+          <li>Lane labels truncated to 25 characters (full query still copied on click and shown on hover).</li>
+        </ul>
+      </div>
+
+      <div class="footer">If your end-lines don’t carry timestamps, pairing will be approximate (we need a timestamp to close an interval).</div>
+    </section>
+
+    <section class="card">
+      <div id="chart" class="chart"></div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<script>
+  function isProbablyJsonl(text) {
+    const firstNonEmpty = text.split(/\r?\n/).find(l => l.trim().length > 0);
+    if (!firstNonEmpty) return false;
+    const s = firstNonEmpty.trim();
+    return s.startsWith("{") && s.endsWith("}");
+  }
+
+  function parseTimeFromString(s) {
+    const t = Date.parse(s);
+    if (!Number.isNaN(t)) return new Date(t);
+    const m = s.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})([\.,](\d{1,6}))?/);
+    if (m) {
+      const datePart = m[1];
+      const timePart = m[2];
+      const frac = m[4] ? m[4].padEnd(3, "0").slice(0, 3) : "000";
+      const iso = `${datePart}T${timePart}.${frac}Z`;
+      const t2 = Date.parse(iso);
+      if (!Number.isNaN(t2)) return new Date(t2);
+    }
+    return null;
+  }
+
+  function truncate(s, n) {
+    s = (s ?? "").toString();
+    if (s.length <= n) return s;
+    return s.slice(0, Math.max(0, n - 1)) + "…";
+  }
+
+  function looksLikeFailure(line) {
+    const l = (line || "").toLowerCase();
+    return l.includes("fail") || l.includes("error") || l.includes("exception");
+  }
+
+  function extractTextId(line) {
+    const m = (line || "").match(/\bid:(\d+)\b/i);
+    return m ? m[1] : null;
+  }
+
+  function extractTextQuery(line) {
+    const idx = (line || "").indexOf(">");
+    const after = idx >= 0 ? line.slice(idx + 1) : (line || "");
+    const parts = after.split(" - ");
+    return (parts[2] ?? "").trim();
+  }
+
+  async function copyToClipboard(text) {
+    if (!text) return false;
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+  }
+
+  function toast(msg) {
+    const el = document.getElementById("toast");
+    el.textContent = msg;
+    el.classList.add("show");
+    clearTimeout(el.__t);
+    el.__t = setTimeout(() => el.classList.remove("show"), 1200);
+  }
+
+  function parseFiles(files) {
+    const open = [];
+    const intervals = [];
+
+    function findOpenById(id) {
+      if (!id) return -1;
+      for (let i = open.length - 1; i >= 0; i--) if (open[i].id === id) return i;
+      return -1;
+    }
+
+    function handleJsonLine(rawLine, sourceFile) {
+      let obj;
+      try { obj = JSON.parse(rawLine); } catch { return; }
+      const t = obj && obj.time ? parseTimeFromString(String(obj.time)) : null;
+      if (!t) return;
+
+      const ev = String(obj.event ?? "").toLowerCase();
+      const isStart = ev === "start" || ev.includes("start");
+      const isSuccess = ev === "success" || ev.includes("success");
+      const isFailure = ev === "failure" || ev.includes("fail");
+      const isEnd = isSuccess || isFailure;
+      if (!isStart && !isEnd) return;
+
+      const id = obj.id != null ? String(obj.id) : null;
+      const query = obj.query != null ? String(obj.query) : "";
+
+      if (isStart) {
+        open.push({ id, query, start: t, startLine: rawLine, sourceFile });
+        return;
+      }
+
+      let idx = findOpenById(id);
+      if (idx === -1 && open.length) idx = open.length - 1;
+      if (idx === -1) return;
+
+      const st = open[idx];
+      open.splice(idx, 1);
+      intervals.push({
+        query: st.query,
+        laneLabel: truncate(st.query || "(query)", 25),
+        start: st.start,
+        end: t,
+        failed: isFailure,
+        hover: `START: ${st.startLine}\nEND:   ${rawLine}`,
+        sourceFile: st.sourceFile,
+      });
+    }
+
+    function handleTextLine(rawLine, sourceFile) {
+      const t = parseTimeFromString(rawLine);
+      if (!t) return;
+
+      const isStart = /query started/i.test(rawLine);
+      const id = extractTextId(rawLine);
+      const query = extractTextQuery(rawLine);
+
+      if (isStart) {
+        open.push({ id, query, start: t, startLine: rawLine, sourceFile });
+        return;
+      }
+
+      let idx = findOpenById(id);
+      if (idx === -1 && open.length) idx = open.length - 1;
+      if (idx === -1) return;
+
+      const st = open[idx];
+      open.splice(idx, 1);
+      intervals.push({
+        query: st.query,
+        laneLabel: truncate(st.query || "(query)", 25),
+        start: st.start,
+        end: t,
+        failed: looksLikeFailure(rawLine),
+        hover: `START: ${st.startLine}\nEND:   ${rawLine}`,
+        sourceFile: st.sourceFile,
+      });
+    }
+
+    for (const file of files) {
+      const text = file.__text;
+      const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
+      const jsonl = isProbablyJsonl(text);
+      for (const rawLine of lines) {
+        if (jsonl) handleJsonLine(rawLine, file.name);
+        else handleTextLine(rawLine, file.name);
+      }
+    }
+
+    intervals.sort((a, b) => a.start - b.start);
+    return intervals;
+  }
+
+  function renderPlot(intervals) {
+    const container = document.getElementById("chart");
+    container.innerHTML = ""; // fixes placeholder sticking under the plot
+
+    if (!intervals.length) {
+      Plotly.purge(container);
+      container.innerHTML = "<div style='padding:16px; color: rgba(231,238,252,0.75)'>No intervals parsed yet. Drop files on the left, then click Render.</div>";
+      return;
+    }
+
+    const laneNames = intervals.map((iv, i) => (iv.laneLabel && iv.laneLabel !== "(query)") ? iv.laneLabel : `Q${i + 1}`);
+    const y = laneNames;
+    const base = intervals.map(iv => iv.start.toISOString());
+    const x = intervals.map(iv => Math.max(0, iv.end - iv.start));
+
+    const customdata = intervals.map((iv, i) => ({
+      hover: iv.hover,
+      start: iv.start.toISOString(),
+      end: iv.end.toISOString(),
+      durationMs: Math.max(0, iv.end - iv.start),
+      sourceFile: iv.sourceFile,
+      idx: i + 1,
+      query: iv.query || "",
+    }));
+
+    const colors = intervals.map(iv => iv.failed ? "#ff5a6a" : "#67a3ff");
+
+    const trace = {
+      type: "bar",
+      orientation: "h",
+      y,
+      x,
+      base,
+      marker: { color: colors, line: { width: 0 } },
+      customdata,
+      hovertemplate:
+        "<b>%{y}</b><br>" +
+        "Start: %{customdata.start}<br>" +
+        "End: %{customdata.end}<br>" +
+        "Duration: %{customdata.durationMs} ms<br>" +
+        "File: %{customdata.sourceFile}<br>" +
+        "<br><span style='white-space:pre-wrap'>%{customdata.hover}</span><extra></extra>",
+    };
+
+    const layout = {
+      margin: { l: 160, r: 20, t: 20, b: 50 },
+      paper_bgcolor: "rgba(0,0,0,0)",
+      plot_bgcolor: "rgba(0,0,0,0)",
+      xaxis: { type: "date", title: "Time", gridcolor: "rgba(231,238,252,0.10)", zerolinecolor: "rgba(231,238,252,0.18)" },
+      yaxis: { title: "Queries (chronological)", gridcolor: "rgba(231,238,252,0.08)", automargin: true, autorange: "reversed" },
+      bargap: 0.25,
+      hoverlabel: { bgcolor: "rgba(18,26,39,0.98)", bordercolor: "rgba(231,238,252,0.20)", font: { color: "#e7eefc" } },
+      showlegend: false,
+    };
+
+    const config = { responsive: true, displaylogo: false, toImageButtonOptions: { format: "png" } };
+
+    Plotly.newPlot(container, [trace], layout, config).then(() => {
+      container.on("plotly_click", async (evt) => {
+        const pt = evt && evt.points && evt.points[0];
+        const q = pt && pt.customdata ? (pt.customdata.query || "") : "";
+        if (!q) { toast("No query to copy"); return; }
+        const ok = await copyToClipboard(q);
+        toast(ok ? "Query copied" : "Copy failed");
+      });
+    });
+  }
+
+  const drop = document.getElementById("drop");
+  const fileInput = document.getElementById("fileInput");
+  const fileCount = document.getElementById("fileCount");
+  const intervalCount = document.getElementById("intervalCount");
+  const renderBtn = document.getElementById("renderBtn");
+  const clearBtn = document.getElementById("clearBtn");
+
+  let loadedFiles = [];
+  let intervals = [];
+
+  async function loadFiles(fileList) {
+    const files = Array.from(fileList || []);
+    for (const f of files) {
+      const text = await f.text();
+      loadedFiles.push(Object.assign(f, { __text: text }));
+    }
+    fileCount.textContent = String(loadedFiles.length);
+  }
+
+  function parseAndRender() {
+    intervals = parseFiles(loadedFiles);
+    intervalCount.textContent = String(intervals.length);
+    renderPlot(intervals);
+  }
+
+  drop.addEventListener("click", () => fileInput.click());
+  drop.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") fileInput.click(); });
+
+  fileInput.addEventListener("change", async (e) => {
+    await loadFiles(e.target.files);
+    parseAndRender();
+    fileInput.value = "";
+  });
+
+  drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("dragover"); });
+  drop.addEventListener("dragleave", () => drop.classList.remove("dragover"));
+  drop.addEventListener("drop", async (e) => {
+    e.preventDefault();
+    drop.classList.remove("dragover");
+    if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) {
+      await loadFiles(e.dataTransfer.files);
+      parseAndRender();
+    }
+  });
+
+  renderBtn.addEventListener("click", parseAndRender);
+  clearBtn.addEventListener("click", () => {
+    loadedFiles = [];
+    intervals = [];
+    fileCount.textContent = "0";
+    intervalCount.textContent = "0";
+    renderPlot([]);
+  });
+
+  renderPlot([]);
+</script>
+</body>
+</html>
