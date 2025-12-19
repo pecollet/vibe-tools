@@ -28,4 +28,5 @@ View query executions in a swimlane chart
 <img width="1584" height="691" alt="image" src="https://github.com/user-attachments/assets/ae0be8f0-24f7-4a20-b190-98b05919fb5d" />
 
 ### [aura_hc_shortcuts](https://pecollet.github.io/vibe-tools/aura_hc_shortcuts)
-Common shortcuts to help go through the steps requied to perform an Aura Health Check
+Common shortcuts to help go through the steps requied to perform an Aura Health Check.
+Includes links to Preset reports, SRE Portal, GCP bucket, HC S3 bucket...
