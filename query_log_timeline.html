@@ -1,0 +1,512 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Query Log Bucket Chart (Plotly)</title>
+  <script src="https://cdn.plot.ly/plotly-2.30.0.min.js"></script>
+  <style>
+    :root { --bg:#0b1020; --card:#111a33; --muted:#8aa0c7; --text:#eaf0ff; --accent:#4cc9f0; --border:rgba(255,255,255,.12); }
+    html, body { height: 100%; }
+    body {
+      margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+      background: radial-gradient(1200px 600px at 20% 0%, #15234b 0%, var(--bg) 55%);
+      color: var(--text);
+    }
+    .wrap { max-width: 1100px; margin: 24px auto; padding: 0 16px; }
+    .row { display:flex; gap:16px; flex-wrap:wrap; align-items:stretch; }
+    .card {
+      background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03));
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      box-shadow: 0 10px 30px rgba(0,0,0,.35);
+    }
+    .drop {
+      flex: 1 1 320px;
+      padding: 18px;
+      min-height: 130px;
+      display:flex;
+      flex-direction:column;
+      justify-content:center;
+      gap:10px;
+    }
+    .dropzone {
+      border: 2px dashed rgba(255,255,255,.25);
+      border-radius: 14px;
+      padding: 18px;
+      text-align:center;
+      background: rgba(17,26,51,.55);
+      transition: .15s ease;
+      cursor: pointer;
+      user-select: none;
+    }
+    .dropzone.drag { border-color: var(--accent); box-shadow: 0 0 0 4px rgba(76,201,240,.15) inset; }
+    .small { color: var(--muted); font-size: 13px; line-height: 1.4; }
+    .controls { flex: 0 1 340px; padding: 18px; display:flex; flex-direction:column; gap:12px; }
+    label { font-size: 13px; color: var(--muted); display:block; margin-bottom:6px; }
+    select, button {
+      width: 100%;
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: rgba(17,26,51,.65);
+      color: var(--text);
+      font-size: 14px;
+      outline: none;
+    }
+    button { cursor:pointer; }
+    button:hover { border-color: rgba(76,201,240,.55); }
+    .filelist { max-height: 120px; overflow:auto; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border); background: rgba(17,26,51,.35); }
+    .pill { display:inline-flex; gap:8px; align-items:center; padding:6px 10px; border-radius: 999px; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.10); margin: 4px 6px 0 0; }
+    .dot { width:10px; height:10px; border-radius:999px; display:inline-block; }
+    .chart { margin-top: 16px; padding: 10px; }
+    #plot { width: 100%; height: 560px; }
+    a { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1 style="margin:0 0 10px 2px; font-size: 20px; letter-spacing:.2px;">Query Log Bucket Chart</h1>
+    <div class="row">
+      <div class="card drop">
+        <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Drop log files">
+          <div style="font-size:16px; font-weight:650;">Drop query log file(s) here</div>
+          <div class="small">…or click to choose files. Timestamps are parsed from the <b>first field</b> of each line; lines containing <code>Query started</code> are ignored.</div>
+        </div>
+        <input id="fileInput" type="file" multiple style="display:none" />
+        <div class="small">Tip: You can drop multiple files to get stacked bars with a legend.</div>
+      </div>
+
+      <div class="card controls">
+        <div>
+          <label for="bucketSelect">Bucket size</label>
+          <select id="bucketSelect"></select>
+          <div id="bucketHint" class="small" style="margin-top:6px;"></div>
+        </div>
+        <div>
+          <label>Loaded files</label>
+          <div id="fileList" class="filelist small">No files loaded.</div>
+        </div>
+        <div style="display:flex; gap:10px;">
+          <button id="clearBtn" type="button">Clear</button>
+          <button id="replotBtn" type="button">Re-plot</button>
+        </div>
+        <div class="small">Dotted vertical lines mark each file’s start/end coverage on the chart.</div>
+      </div>
+    </div>
+
+    <div class="card chart">
+      <div id="plot"></div>
+    </div>
+  </div>
+
+  <script>
+    // ---------- Utilities ----------
+    const COLORS = [
+      '#4cc9f0','#f72585','#b5179e','#7209b7','#3a0ca3','#4361ee','#4895ef','#06d6a0','#ffd166','#ef476f'
+    ];
+
+    function clamp(n, a, b) { return Math.max(a, Math.min(b, n)); }
+
+    // Try to parse common timestamp formats from the first whitespace-delimited token.
+    // Supports:
+    //  - ISO 8601: 2025-12-19T12:34:56.789Z / with offset
+    //  - Date + time separated by comma or underscore: 2025-12-19 12:34:56.789
+    //  - Unix epoch seconds/ms
+    function parseTimestampFromLine(line) {
+      if (!line) return null;
+      const s = line.trim();
+      if (!s) return null;
+
+      // Ignore text-log "Query started" lines
+      if (s.includes('Query started')) return null;
+
+      // ---- JSON Lines support ----
+      // Use obj.time, ignore {"event":"start", ...}
+      // Example time: "2025-12-15 12:54:28.288+0000"
+      if (s[0] === '{') {
+        try {
+          const obj = JSON.parse(s);
+          if (obj && typeof obj === 'object') {
+            if (obj.event === 'start') return null;
+            if (typeof obj.time === 'string' && obj.time.length) {
+              let t = obj.time.trim();
+
+              // Replace first space between date and time with 'T'
+              t = t.replace(
+                /^([0-9]{4}-[0-9]{2}-[0-9]{2})\s+/,
+                function (_m, d) { return d + 'T'; }
+              );
+
+              // Normalize timezone offsets like +0000 / -0530 -> +00:00 / -05:30
+              t = t.replace(
+                /([+-][0-9]{2})([0-9]{2})\s*$/,
+                function (_m, hh, mm) { return hh + ':' + mm; }
+              );
+
+              const d = new Date(t);
+              if (!isNaN(d.getTime())) return d;
+            }
+          }
+        } catch (_e) {
+          // Not JSON, fall through
+        }
+      }
+
+      // ---- Text log support ----
+      // Extract a leading timestamp pattern (date-only would cause midnight, so we try to capture time if present)
+      const m = s.match(
+        /^([0-9]{4}-[0-9]{2}-[0-9]{2}(?:[T ][0-9]{2}:[0-9]{2}:[0-9]{2}(?:[.][0-9]+)?(?:Z|[+-][0-9]{2}:?[0-9]{2})?)?|[0-9]{10}(?:\.[0-9]+)?|[0-9]{13})/
+      );
+      const token = m ? m[1] : null;
+      if (!token) return null;
+
+      // Epoch seconds/ms
+      if (/^\d{10}(\.\d+)?$/.test(token)) {
+        const sec = Number(token);
+        if (!Number.isFinite(sec)) return null;
+        return new Date(sec * 1000);
+      }
+      if (/^\d{13}$/.test(token)) {
+        const ms = Number(token);
+        if (!Number.isFinite(ms)) return null;
+        return new Date(ms);
+      }
+
+      // ISO-ish / space-separated date-time
+      let cleaned = token.replace(/,$/, '');
+
+      // Normalize "YYYY-MM-DD HH:MM:SS" -> "YYYY-MM-DDTHH:MM:SS"
+      cleaned = cleaned.replace(
+        /^([0-9]{4}-[0-9]{2}-[0-9]{2})\s+/,
+        function (_m, d) { return d + 'T'; }
+      );
+
+      // Normalize timezone offsets like +0000 -> +00:00
+      cleaned = cleaned.replace(
+        /([+-][0-9]{2})([0-9]{2})$/,
+        function (_m, hh, mm) { return hh + ':' + mm; }
+      );
+
+      const d1 = new Date(cleaned);
+      if (!isNaN(d1.getTime())) return d1;
+
+      return null;
+    }
+
+
+    function floorToBucket(ms, bucketMs) {
+      return Math.floor(ms / bucketMs) * bucketMs;
+    }
+
+    function formatDuration(ms) {
+      const s = Math.round(ms / 1000);
+      if (s < 60) return `${s}s`;
+      const m = Math.round(s / 60);
+      if (m < 60) return `${m}m`;
+      const h = Math.round(m / 60);
+      if (h < 48) return `${h}h`;
+      const d = Math.round(h / 24);
+      return `${d}d`;
+    }
+
+    // ---------- State ----------
+    /** @type {{name: string, color: string, timestamps: Date[], start: Date, end: Date}[]} */
+    let filesState = [];
+
+    // Current chosen bucket (ms)
+    let bucketMs = null;
+
+    // ---------- DOM ----------
+    const dz = document.getElementById('dropzone');
+    const fileInput = document.getElementById('fileInput');
+    const bucketSelect = document.getElementById('bucketSelect');
+    const bucketHint = document.getElementById('bucketHint');
+    const fileList = document.getElementById('fileList');
+    const clearBtn = document.getElementById('clearBtn');
+    const replotBtn = document.getElementById('replotBtn');
+
+    // ---------- Bucket options ----------
+    function buildBucketOptions(totalSpanMs) {
+      // Default is 1/100th of total span.
+      const defaultMs = Math.max(1, Math.floor(totalSpanMs / 100));
+
+      // Build a set of reasonable options around that default.
+      // We include: total/25, total/50, total/100, total/200, and a few fixed durations.
+      const dynamic = [25, 50, 100, 200].map(div => Math.max(1, Math.floor(totalSpanMs / div)));
+      const fixed = [
+        1000, 2000, 5000, 10000, 30000,
+        60000, 2*60000, 5*60000, 10*60000, 15*60000, 30*60000,
+        60*60000, 2*60*60000, 6*60*60000,
+        24*60*60000
+      ];
+      const all = Array.from(new Set([...dynamic, ...fixed]))
+        .filter(v => v <= Math.max(totalSpanMs, defaultMs))
+        .sort((a,b)=>a-b);
+
+      bucketSelect.innerHTML = '';
+      for (const ms of all) {
+        const opt = document.createElement('option');
+        opt.value = String(ms);
+        opt.textContent = formatDuration(ms);
+        bucketSelect.appendChild(opt);
+      }
+
+      // Choose the closest to defaultMs.
+      let best = all[0];
+      let bestDist = Math.abs(best - defaultMs);
+      for (const ms of all) {
+        const dist = Math.abs(ms - defaultMs);
+        if (dist < bestDist) { best = ms; bestDist = dist; }
+      }
+
+      bucketSelect.value = String(best);
+      bucketMs = best;
+
+      bucketHint.textContent = `Default bucket ≈ total span / 100 → ${formatDuration(defaultMs)} (selected ${formatDuration(best)}).`;
+    }
+
+    // ---------- File parsing ----------
+    async function parseFile(file, color) {
+      const text = await file.text();
+      const lines = text.split(/\r?\n/);
+      const timestamps = [];
+      for (const line of lines) {
+        const ts = parseTimestampFromLine(line);
+        if (ts) timestamps.push(ts);
+      }
+      timestamps.sort((a,b)=>a.getTime()-b.getTime());
+      const start = timestamps[0] ?? null;
+      const end = timestamps[timestamps.length-1] ?? null;
+      return { name: file.name, color, timestamps, start, end };
+    }
+
+    function renderFileList() {
+      if (!filesState.length) {
+        fileList.textContent = 'No files loaded.';
+        return;
+      }
+      fileList.innerHTML = '';
+      const frag = document.createDocumentFragment();
+      for (const f of filesState) {
+        const pill = document.createElement('span');
+        pill.className = 'pill';
+        const dot = document.createElement('span');
+        dot.className = 'dot';
+        dot.style.background = f.color;
+        const meta = document.createElement('span');
+        meta.textContent = `${f.name} — ${f.timestamps.length} events` + (f.start && f.end ? ` (${f.start.toISOString()} → ${f.end.toISOString()})` : ' (no timestamps parsed)');
+        pill.appendChild(dot);
+        pill.appendChild(meta);
+        frag.appendChild(pill);
+      }
+      fileList.appendChild(frag);
+    }
+
+    function computeGlobalSpan() {
+      const all = filesState.flatMap(f => f.timestamps);
+      if (!all.length) return null;
+      const min = Math.min(...all.map(d=>d.getTime()));
+      const max = Math.max(...all.map(d=>d.getTime()));
+      return { min, max, span: Math.max(1, max - min) };
+    }
+
+    // ---------- Plotting ----------
+    function buildBuckets(minMs, maxMs, bucketMs) {
+      const start = floorToBucket(minMs, bucketMs);
+      const end = floorToBucket(maxMs, bucketMs) + bucketMs;
+      const buckets = [];
+      for (let t = start; t <= end; t += bucketMs) buckets.push(t);
+      return buckets; // bucket boundaries; last is end boundary
+    }
+
+    function countsPerBucket(timestamps, bucketMs, bucketStartMs) {
+      // bucketStartMs is the global first boundary
+      const counts = new Map();
+      for (const d of timestamps) {
+        const ms = d.getTime();
+        const b = floorToBucket(ms - bucketStartMs, bucketMs) + bucketStartMs;
+        counts.set(b, (counts.get(b) || 0) + 1);
+      }
+      return counts;
+    }
+
+    function dottedLine(xMs, color, label) {
+      return {
+        type: 'line',
+        xref: 'x',
+        yref: 'paper',
+        x0: new Date(xMs),
+        x1: new Date(xMs),
+        y0: 0,
+        y1: 1,
+        line: { dash: 'dot', width: 1, color },
+        opacity: 0.9,
+        // no direct label; we add annotations separately
+      };
+    }
+
+    function plot() {
+      const span = computeGlobalSpan();
+      if (!span) {
+        Plotly.newPlot('plot', [{ x: [], y: [], type: 'bar' }], {
+          title: { text: 'Drop log files to plot events over time' },
+          paper_bgcolor: 'rgba(0,0,0,0)',
+          plot_bgcolor: 'rgba(0,0,0,0)'
+        }, {responsive:true});
+        return;
+      }
+
+      const minMs = span.min;
+      const maxMs = span.max;
+      const bm = bucketMs ?? Math.max(1, Math.floor(span.span / 100));
+
+      const boundaries = buildBuckets(minMs, maxMs, bm);
+      const bucketStarts = boundaries.slice(0, -1);
+      const x = bucketStarts.map(ms => new Date(ms));
+
+      const traces = [];
+      const shapes = [];
+      const annotations = [];
+
+      // Global bucket start for alignment
+      const globalStart = bucketStarts[0];
+
+      filesState.forEach((f, i) => {
+        const counts = countsPerBucket(f.timestamps, bm, globalStart);
+        const y = bucketStarts.map(ms => counts.get(ms) || 0);
+        traces.push({
+          type: 'bar',
+          name: f.name,
+          x,
+          y,
+          marker: { color: f.color },
+          hovertemplate: `%{x|%Y-%m-%d %H:%M:%S}<br>${f.name}<br>Count: %{y}<extra></extra>`
+        });
+
+        if (f.start && f.end) {
+          const startMs = f.start.getTime();
+          const endMs = f.end.getTime();
+          shapes.push(dottedLine(startMs, f.color));
+          shapes.push(dottedLine(endMs, f.color));
+          annotations.push({
+            x: f.start,
+            y: 1.02,
+            yref: 'paper',
+            text: `${f.name} start`,
+            showarrow: false,
+            font: { size: 11, color: f.color },
+            xanchor: 'left'
+          });
+          annotations.push({
+            x: f.end,
+            y: 1.02,
+            yref: 'paper',
+            text: `${f.name} end`,
+            showarrow: false,
+            font: { size: 11, color: f.color },
+            xanchor: 'left'
+          });
+        }
+      });
+
+      const layout = {
+        barmode: filesState.length > 1 ? 'stack' : 'group',
+        title: { text: 'Event counts over time (bucketed)' },
+        xaxis: {
+          title: { text: 'Time' },
+          type: 'date',
+          showgrid: true,
+          zeroline: false
+        },
+        yaxis: {
+          title: { text: 'Count of events' },
+          rangemode: 'tozero',
+          showgrid: true,
+          zeroline: false
+        },
+        legend: {
+          orientation: 'h',
+          x: 0,
+          y: -0.15
+        },
+        margin: { l: 60, r: 30, t: 60, b: 80 },
+        shapes,
+        annotations,
+        paper_bgcolor: 'rgba(0,0,0,0)',
+        plot_bgcolor: 'rgba(0,0,0,0)'
+      };
+
+      Plotly.newPlot('plot', traces, layout, { responsive: true, displaylogo: false });
+    }
+
+    // ---------- Interaction ----------
+    async function handleFiles(fileListObj) {
+      const files = Array.from(fileListObj || []).filter(f => f && f.name);
+      if (!files.length) return;
+
+      const startColorIdx = filesState.length % COLORS.length;
+      const parsed = [];
+      for (let i = 0; i < files.length; i++) {
+        const color = COLORS[(startColorIdx + i) % COLORS.length];
+        parsed.push(await parseFile(files[i], color));
+      }
+
+      // Merge (append). If same name re-dropped, keep both; users often compare.
+      filesState = filesState.concat(parsed);
+
+      renderFileList();
+
+      const span = computeGlobalSpan();
+      if (span) buildBucketOptions(span.span);
+
+      plot();
+    }
+
+    dz.addEventListener('click', () => fileInput.click());
+    dz.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); }
+    });
+
+    fileInput.addEventListener('change', async (e) => {
+      await handleFiles(e.target.files);
+      fileInput.value = '';
+    });
+
+    ;['dragenter','dragover'].forEach(ev => dz.addEventListener(ev, (e) => {
+      e.preventDefault(); e.stopPropagation();
+      dz.classList.add('drag');
+    }));
+    ;['dragleave','drop'].forEach(ev => dz.addEventListener(ev, (e) => {
+      e.preventDefault(); e.stopPropagation();
+      dz.classList.remove('drag');
+    }));
+
+    dz.addEventListener('drop', async (e) => {
+      const dt = e.dataTransfer;
+      if (!dt) return;
+      await handleFiles(dt.files);
+    });
+
+    bucketSelect.addEventListener('change', () => {
+      bucketMs = Number(bucketSelect.value);
+      plot();
+    });
+
+    clearBtn.addEventListener('click', () => {
+      filesState = [];
+      bucketMs = null;
+      bucketSelect.innerHTML = '';
+      bucketHint.textContent = '';
+      renderFileList();
+      plot();
+    });
+
+    replotBtn.addEventListener('click', () => plot());
+
+    // Initial empty plot
+    renderFileList();
+    plot();
+  </script>
+</body>
+</html>
