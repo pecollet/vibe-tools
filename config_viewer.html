@@ -1,0 +1,622 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Config Viewer</title>
+  <style>
+    :root {
+      --bg: #0b0f17;
+      --panel: #0f1624;
+      --panel2: #111c2e;
+      --text: #e7eefc;
+      --muted: #a9b6d3;
+      --border: #23304a;
+      --accent: #5aa7ff;
+      --accent2: #8be9fd;
+      --danger: #ff6b6b;
+      --shadow: 0 10px 40px rgba(0,0,0,.35);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+      background: radial-gradient(1200px 600px at 15% 0%, #132244 0%, rgba(19,34,68,0) 60%),
+                  radial-gradient(900px 500px at 85% 10%, #1a2e4d 0%, rgba(26,46,77,0) 55%),
+                  var(--bg);
+      color: var(--text);
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    header {
+      padding: 18px 22px;
+      display: flex;
+      gap: 16px;
+      align-items: center;
+      border-bottom: 1px solid var(--border);
+      background: rgba(11, 15, 23, 0.65);
+      backdrop-filter: blur(10px);
+    }
+
+    header h1 {
+      font-size: 16px;
+      margin: 0;
+      letter-spacing: 0.3px;
+      color: var(--text);
+      font-weight: 650;
+      white-space: nowrap;
+    }
+
+    .controls {
+      flex: 1;
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      min-width: 0;
+    }
+
+    .input {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: linear-gradient(180deg, rgba(17, 28, 46, 0.8), rgba(15, 22, 36, 0.8));
+      box-shadow: var(--shadow);
+      min-width: 260px;
+      max-width: 560px;
+      width: 100%;
+    }
+
+    .input input {
+      width: 100%;
+      border: 0;
+      outline: 0;
+      background: transparent;
+      color: var(--text);
+      font-size: 13px;
+    }
+
+    .input input::placeholder { color: rgba(169, 182, 211, 0.7); }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: rgba(15, 22, 36, 0.8);
+      box-shadow: var(--shadow);
+      font-size: 12px;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    .pill strong { color: var(--text); font-weight: 650; }
+
+    .btn {
+      cursor: pointer;
+      user-select: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: rgba(15, 22, 36, 0.8);
+      box-shadow: var(--shadow);
+      font-size: 12px;
+      color: var(--text);
+    }
+
+    .btn:hover { border-color: rgba(90,167,255,.6); }
+
+    .btn:active { transform: translateY(1px); }
+
+    main {
+      height: calc(100vh - 61px);
+      display: flex;
+      flex-direction: column;
+      padding: 14px 16px 16px;
+      gap: 12px;
+    }
+
+    .dropzone {
+      border: 1px dashed rgba(90, 167, 255, 0.55);
+      border-radius: 16px;
+      background: rgba(15, 22, 36, 0.55);
+      box-shadow: var(--shadow);
+      padding: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .dropzone .left {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 0;
+    }
+
+    .dropzone .title {
+      font-weight: 700;
+      font-size: 14px;
+      margin: 0;
+    }
+
+    .dropzone .hint {
+      margin: 0;
+      color: rgba(169, 182, 211, 0.9);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .dropzone.dragover {
+      border-color: rgba(139, 233, 253, 0.9);
+      background: rgba(17, 28, 46, 0.75);
+    }
+
+    .dropzone .right {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .dropzone input[type="file"] {
+      display: none;
+    }
+
+    .tableWrap {
+      flex: 1;
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      background: rgba(15, 22, 36, 0.62);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+      font-size: 13px;
+    }
+
+    thead {
+      background: rgba(17, 28, 46, 0.95);
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      z-index: 2;
+    }
+
+    th, td {
+      padding: 10px 12px;
+      border-bottom: 1px solid rgba(35, 48, 74, 0.7);
+      vertical-align: top;
+    }
+
+    th {
+      text-align: left;
+      font-weight: 750;
+      letter-spacing: 0.2px;
+      color: var(--text);
+      cursor: pointer;
+      user-select: none;
+      position: relative;
+    }
+
+    th .sort {
+      position: absolute;
+      right: 10px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: rgba(169, 182, 211, 0.85);
+      font-size: 12px;
+    }
+
+    tbody {
+      overflow: auto;
+    }
+
+    tbody tr:hover {
+      background: rgba(90, 167, 255, 0.08);
+    }
+
+    td.key {
+      width: 46%;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      color: #eaf2ff;
+      word-break: break-word;
+    }
+
+    td.val {
+      width: 54%;
+      color: rgba(231, 238, 252, 0.95);
+      word-break: break-word;
+    }
+
+    td.val pre {
+      margin: 0;
+      white-space: pre-wrap;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 12px;
+      line-height: 1.35;
+      color: rgba(231, 238, 252, 0.95);
+    }
+
+    .scroller {
+      overflow: auto;
+      min-height: 0;
+      flex: 1;
+    }
+
+    .empty {
+      padding: 22px;
+      color: rgba(169, 182, 211, 0.9);
+      font-size: 13px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 8px;
+      border: 1px solid rgba(90, 167, 255, 0.4);
+      border-radius: 999px;
+      background: rgba(90, 167, 255, 0.08);
+      color: rgba(231, 238, 252, 0.95);
+      font-size: 12px;
+    }
+
+    .err {
+      color: var(--danger);
+      font-size: 12px;
+      margin-left: 8px;
+    }
+
+    /* Wide-screen bias: make content breathe */
+    @media (min-width: 1100px) {
+      header { padding-left: 28px; padding-right: 28px; }
+      main { padding-left: 26px; padding-right: 26px; }
+      td, th { padding-left: 16px; padding-right: 16px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Config Viewer</h1>
+    <div class="controls">
+      <div class="input" title="Filter by key or value (case-insensitive)">
+        <span style="color: var(--muted); font-size: 12px;">🔎</span>
+        <input id="filter" type="text" placeholder="Filter… (e.g. auth_enabled, bolt, 7687, server.jvm.additional)" autocomplete="off" />
+      </div>
+      <div class="pill" title="Rows shown / total keys">
+        <span>Rows</span>
+        <strong id="rows">0</strong>
+        <span style="opacity:.75">/</span>
+        <strong id="total">0</strong>
+      </div>
+      <div class="pill" title="How repeated keys are shown">
+        <span class="badge">Repeated keys → multi-line values</span>
+      </div>
+      <div class="btn" id="clearBtn" title="Clear table">🧹 Clear</div>
+    </div>
+  </header>
+
+  <main>
+    <section class="dropzone" id="dropzone">
+      <div class="left">
+        <p class="title">Drop a key=value config file here</p>
+        <p class="hint">
+          Comments and empty lines are removed automatically. Supports repeated keys (e.g. <code>server.jvm.additional</code>) — all values are kept.
+          <br />
+          Comment lines starting with <code>#</code> or <code>;</code> are ignored.
+        </p>
+      </div>
+      <div class="right">
+        <label class="btn" for="fileInput">📄 Choose file</label>
+        <input id="fileInput" type="file" accept=".conf,.properties,.txt,*/*" />
+        <span id="fileName" style="color: var(--muted); font-size: 12px; max-width: 520px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"></span>
+        <span id="error" class="err"></span>
+      </div>
+    </section>
+
+    <section class="tableWrap">
+      <div class="scroller" id="scroller">
+        <table id="table" aria-label="Config properties">
+          <thead>
+            <tr>
+              <th data-col="key" style="width:46%">Key <span class="sort" id="sortKey">↕</span></th>
+              <th data-col="value" style="width:54%">Value <span class="sort" id="sortVal">↕</span></th>
+            </tr>
+          </thead>
+          <tbody id="tbody">
+            <tr><td colspan="2" class="empty">Drop a file to see parsed properties.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    /**
+     * Neo4j-style config parsing for key=value lines.
+     * - Ignores empty lines
+     * - Ignores full-line comments starting with # or ; (after trimming)
+     * - Keeps repeated keys as arrays (e.g., server.jvm.additional)
+     * - Preserves value exactly as provided (minus surrounding whitespace)
+     */
+
+    const state = {
+      entries: /** @type {{ key: string, values: string[] }[]} */ ([]),
+      sort: { col: 'key', dir: 'asc' },
+      filter: ''
+    };
+
+    const el = {
+      dropzone: document.getElementById('dropzone'),
+      fileInput: document.getElementById('fileInput'),
+      fileName: document.getElementById('fileName'),
+      error: document.getElementById('error'),
+      filter: document.getElementById('filter'),
+      tbody: document.getElementById('tbody'),
+      rows: document.getElementById('rows'),
+      total: document.getElementById('total'),
+      clearBtn: document.getElementById('clearBtn'),
+      sortKey: document.getElementById('sortKey'),
+      sortVal: document.getElementById('sortVal'),
+    };
+
+    function setError(msg) {
+      el.error.textContent = msg || '';
+    }
+
+    function resetUIEmpty() {
+      el.tbody.innerHTML = '<tr><td colspan="2" class="empty">Drop a file to see parsed properties.</td></tr>';
+      el.rows.textContent = '0';
+      el.total.textContent = '0';
+      el.fileName.textContent = '';
+      setError('');
+    }
+
+    function clearAll() {
+      state.entries = [];
+      state.filter = '';
+      el.filter.value = '';
+      state.sort = { col: 'key', dir: 'asc' };
+      updateSortIndicators();
+      resetUIEmpty();
+    }
+
+    function normalizeLine(line) {
+      // Remove trailing CR, preserve other whitespace until trimming in parse
+      return line.replace(/\r$/, '');
+    }
+
+    function isCommentOrEmpty(trimmedLine) {
+      return trimmedLine.length === 0 || trimmedLine.startsWith('#') || trimmedLine.startsWith(';');
+    }
+
+    function splitKeyValue(line) {
+      // Split on first '=' only.
+      const idx = line.indexOf('=');
+      if (idx === -1) return null;
+      const key = line.slice(0, idx).trim();
+      const value = line.slice(idx + 1).trim();
+      if (!key) return null;
+      return { key, value };
+    }
+
+    function parseConfig(text) {
+      /** @type {Map<string, string[]>} */
+      const map = new Map();
+
+      const lines = text.split(/\n/);
+      for (let raw of lines) {
+        raw = normalizeLine(raw);
+        const trimmed = raw.trim();
+        if (isCommentOrEmpty(trimmed)) continue;
+
+        // Basic properties format: key=value
+        // We deliberately do NOT treat inline '#' as comment because Neo4j values can contain '#'
+        // If you want inline comment support later, we can add a safer heuristic.
+        const kv = splitKeyValue(raw);
+        if (!kv) continue;
+
+        if (!map.has(kv.key)) map.set(kv.key, []);
+        map.get(kv.key).push(kv.value);
+      }
+
+      const entries = Array.from(map.entries()).map(([key, values]) => ({ key, values }));
+      return entries;
+    }
+
+    function updateSortIndicators() {
+      // Reset
+      el.sortKey.textContent = '↕';
+      el.sortVal.textContent = '↕';
+
+      const arrow = state.sort.dir === 'asc' ? '↑' : '↓';
+      if (state.sort.col === 'key') el.sortKey.textContent = arrow;
+      if (state.sort.col === 'value') el.sortVal.textContent = arrow;
+    }
+
+    function sortEntries(entries) {
+      const { col, dir } = state.sort;
+      const mul = dir === 'asc' ? 1 : -1;
+
+      return entries.slice().sort((a, b) => {
+        if (col === 'key') {
+          return a.key.localeCompare(b.key) * mul;
+        }
+        // sort by first value, then key (stable-ish)
+        const av = (a.values[0] ?? '');
+        const bv = (b.values[0] ?? '');
+        const c = av.localeCompare(bv) * mul;
+        if (c !== 0) return c;
+        return a.key.localeCompare(b.key) * mul;
+      });
+    }
+
+    function filterEntries(entries) {
+      const f = state.filter.trim().toLowerCase();
+      if (!f) return entries;
+
+      return entries.filter(e => {
+        if (e.key.toLowerCase().includes(f)) return true;
+        for (const v of e.values) {
+          if ((v ?? '').toLowerCase().includes(f)) return true;
+        }
+        return false;
+      });
+    }
+
+    function escapeHtml(s) {
+      return s
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
+    function renderTable() {
+      updateSortIndicators();
+
+      const total = state.entries.length;
+      let view = filterEntries(state.entries);
+      view = sortEntries(view);
+
+      el.total.textContent = String(total);
+      el.rows.textContent = String(view.length);
+
+      if (total === 0) {
+        resetUIEmpty();
+        return;
+      }
+
+      if (view.length === 0) {
+        el.tbody.innerHTML = '<tr><td colspan="2" class="empty">No matches for the current filter.</td></tr>';
+        return;
+      }
+
+      const rowsHtml = view.map(e => {
+        const valuesJoined = e.values.join('\n');
+        return `
+          <tr>
+            <td class="key">${escapeHtml(e.key)}</td>
+            <td class="val"><pre>${escapeHtml(valuesJoined)}</pre></td>
+          </tr>
+        `;
+      }).join('');
+
+      el.tbody.innerHTML = rowsHtml;
+    }
+
+    async function readFile(file) {
+      // Try UTF-8 first; fall back to default.
+      // Most config files will be UTF-8/ASCII.
+      try {
+        return await file.text();
+      } catch {
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ''));
+          reader.onerror = () => reject(reader.error);
+          reader.readAsText(file);
+        });
+      }
+    }
+
+    async function handleFile(file) {
+      setError('');
+      if (!file) return;
+
+      el.fileName.textContent = file.name;
+
+      try {
+        const text = await readFile(file);
+        state.entries = parseConfig(text);
+        renderTable();
+
+        if (state.entries.length === 0) {
+          setError('No key=value pairs found (after removing comments/empty lines).');
+        }
+      } catch (e) {
+        console.error(e);
+        setError('Could not read/parse file.');
+      }
+    }
+
+    // Drag & drop
+    ;['dragenter', 'dragover'].forEach(evt => {
+      el.dropzone.addEventListener(evt, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        el.dropzone.classList.add('dragover');
+      });
+    });
+
+    ;['dragleave', 'drop'].forEach(evt => {
+      el.dropzone.addEventListener(evt, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        el.dropzone.classList.remove('dragover');
+      });
+    });
+
+    el.dropzone.addEventListener('drop', (e) => {
+      const dt = e.dataTransfer;
+      const file = dt && dt.files && dt.files[0];
+      if (file) handleFile(file);
+    });
+
+    // File picker
+    el.fileInput.addEventListener('change', (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (file) handleFile(file);
+      // allow picking same file again
+      e.target.value = '';
+    });
+
+    // Filter
+    el.filter.addEventListener('input', () => {
+      state.filter = el.filter.value;
+      renderTable();
+    });
+
+    // Sort
+    document.querySelectorAll('th[data-col]').forEach(th => {
+      th.addEventListener('click', () => {
+        const col = th.getAttribute('data-col');
+        if (!col) return;
+
+        if (state.sort.col === col) {
+          state.sort.dir = state.sort.dir === 'asc' ? 'desc' : 'asc';
+        } else {
+          state.sort.col = col;
+          state.sort.dir = 'asc';
+        }
+        renderTable();
+      });
+    });
+
+    // Clear
+    el.clearBtn.addEventListener('click', clearAll);
+
+    // Initial
+    resetUIEmpty();
+  </script>
+</body>
+</html>
