@@ -6,7 +6,8 @@ A repository of small tools built using genAI
 - [plot_csv_metrics](https://pecollet.github.io/vibe-tools/plot_csv_metrics)
 - [config_viewer](https://pecollet.github.io/vibe-tools/config_viewer)
 - [query_log_timeline](https://pecollet.github.io/vibe-tools/query_log_timeline)
-- [query_log_swimlanes.html](https://pecollet.github.io/vibe-tools/query_log_swimlanes)
+- [query_log_swimlanes](https://pecollet.github.io/vibe-tools/query_log_swimlanes)
+- [aura_hc_shortcuts](https://pecollet.github.io/vibe-tools/aura_hc_shortcuts)
 
 ## Descriptions
 
@@ -22,6 +23,9 @@ View config settings in a searchable/sortable table
 View query counts on a timeline
 <img width="926" height="840" alt="image" src="https://github.com/user-attachments/assets/f38e6c6f-ecdd-4cdf-abdd-8beecd020b04" />
 
-### [query_log_swimlanes.html](https://pecollet.github.io/vibe-tools/query_log_swimlanes)
+### [query_log_swimlanes](https://pecollet.github.io/vibe-tools/query_log_swimlanes)
 View query executions in a swimlane chart
 <img width="1584" height="691" alt="image" src="https://github.com/user-attachments/assets/ae0be8f0-24f7-4a20-b190-98b05919fb5d" />
+
+### [aura_hc_shortcuts](https://pecollet.github.io/vibe-tools/aura_hc_shortcuts)
+Common shortcuts to help go through the steps requied to perform an Aura Health Check

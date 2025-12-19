@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DBID Ops Dashboard</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; }
+    header { position: sticky; top: 0; z-index: 10; background: Canvas; border-bottom: 1px solid color-mix(in oklab, CanvasText 20%, transparent); }
+    .bar { display: flex; gap: 8px; align-items: center; padding: 12px 14px; flex-wrap: wrap; }
+    label { font-weight: 600; }
+    input[type="text"] {
+      width: min(520px, 100%);
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid color-mix(in oklab, CanvasText 20%, transparent);
+      background: color-mix(in oklab, Canvas 92%, CanvasText 8%);
+      color: CanvasText;
+      outline: none;
+    }
+    button, a.btn {
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid color-mix(in oklab, CanvasText 20%, transparent);
+      background: color-mix(in oklab, Canvas 88%, CanvasText 12%);
+      color: CanvasText;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      width: auto;
+      max-width: max-content;
+    }
+    button:hover, a.btn:hover { background: color-mix(in oklab, Canvas 80%, CanvasText 20%); }
+    .hint { opacity: 0.8; font-size: 12px; }
+
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 10px; box-sizing: border-box; }
+    @media (max-width: 1100px) { .grid { grid-template-columns: 1fr; } }
+
+    .panel { border: 1px solid color-mix(in oklab, CanvasText 15%, transparent); border-radius: 14px; overflow: hidden; background: Canvas; }
+    .panel h2 { margin: 0; padding: 10px 12px; font-size: 14px; border-bottom: 1px solid color-mix(in oklab, CanvasText 12%, transparent); }
+    .panel .content { padding: 12px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .note { font-size: 12px; opacity: 0.75; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1 style="margin:0; padding:12px 14px; font-size:20px;">Aura Health Check shortcuts</h1>
+  </header>
+
+  <main class="grid" style="grid-template-columns: 1fr;">
+    <section class="panel">
+      <h2>Admin reports workflow</h2>
+      <div class="content" style="display:grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap:16px; align-items:start;">
+        <div style="display:flex; flex-direction:column; gap:10px;">
+          <h3 style="margin:0; font-size:14px;">Find dbid</h3>
+          <a class="btn" href="https://9d89c3b1.us2a.app.preset.io/superset/dashboard/29/?native_filters_key=2m6S656E0IcQzcp6pSM-PYU9qHZ3QamRvbQ4pGIoweA7X_inMGHDCSB6S-87Prwu" target="_blank" rel="noopener noreferrer">Preset db lookup ↗</a>
+          <div>
+            <input id="dbid" type="text" inputmode="text" autocomplete="off" placeholder="Enter dbid" list="dbidSuggestions" />
+            <datalist id="dbidSuggestions"></datalist>
+          </div>
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button id="go" type="button">Update links</button>
+            <button id="clear" type="button" title="Clear saved dbids">Clear history</button>
+          </div>
+          <div class="hint">Previous dbids are saved locally and used for autocomplete.</div>
+        </div>
+
+        <div style="display:flex; flex-direction:column; gap:10px;">
+          <h3 style="margin:0; font-size:14px;">Generate admin-reports</h3>
+          <a id="sreLink" class="btn" target="_blank" rel="noopener noreferrer">SRE Portal Operations ↗</a>
+        </div>
+
+        <div style="display:flex; flex-direction:column; gap:10px;">
+          <h3 style="margin:0; font-size:14px;">Download admin-reports</h3>
+          <a id="gcsLink" class="btn" target="_blank" rel="noopener noreferrer">Open GCP bucket ↗</a>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Upload to the Health Check online service</h2>
+      <div class="content" style="display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap:16px; align-items:flex-start;">
+        <div>
+          <h3 style="margin:0 0 8px 0; font-size:14px;">S3</h3>
+          <a id="s3Link" class="btn" target="_blank" rel="noopener noreferrer">Open S3 bucket ↗</a>
+        </div>
+        <div>
+          <h3 style="margin:0 0 8px 0; font-size:14px;">SFTP</h3>
+          <a class="btn" href="https://login.prod.cs-neo4j.com" target="_blank" rel="noopener noreferrer">SFTP 1-time code ↗</a>
+          <a class="btn" href="ftp://first.last@neo4j.com@sftp.healthcheck.neo4j.com/" target="_blank" rel="noopener noreferrer">SFTP ↗</a>
+        </div>
+        <div>
+          <h3 style="margin:0 0 8px 0; font-size:14px;">HTTP</h3>
+          <a class="btn" href="https://admin.upload.support.neo4j.com/" target="_blank" rel="noopener noreferrer">HTTP Upload – User creation ↗</a>
+          <a class="btn" href="https://upload.support.neo4j.com" target="_blank" rel="noopener noreferrer">HTTP Upload ↗</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    (function () {
+      const STORAGE_KEY = 'dbidHistory.v2';
+      const MAX_HISTORY = 20;
+
+      const input = document.getElementById('dbid');
+      const datalist = document.getElementById('dbidSuggestions');
+      const goBtn = document.getElementById('go');
+      const clearBtn = document.getElementById('clear');
+      const sreLink = document.getElementById('sreLink');
+      const gcsLink = document.getElementById('gcsLink');
+      const s3Link = document.getElementById('s3Link');
+
+      function safeDbid(raw) {
+        return String(raw || '').trim();
+      }
+
+      function loadHistory() {
+        try {
+          const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+          if (Array.isArray(parsed)) return parsed.map(String);
+        } catch (_) {}
+        return [];
+      }
+
+      function saveHistory(list) {
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(list.slice(0, MAX_HISTORY)));
+        } catch (_) {}
+      }
+
+      function renderDatalist(list) {
+        datalist.innerHTML = '';
+        list.forEach((v) => {
+          const opt = document.createElement('option');
+          opt.value = v;
+          datalist.appendChild(opt);
+        });
+      }
+
+      function setLinks(dbid) {
+        const encoded = encodeURIComponent(dbid);
+        sreLink.href = `https://sre.neo4j.io/databases/${encoded}/operations#operationsSection`;
+        gcsLink.href = `https://console.cloud.google.com/storage/browser/production-aura-operations-utility-support/production/${encoded}/neo4j-admin-report;tab=objects?prefix=&forceOnObjectsSortingFiltering=false`;
+        // Static (no dbid)
+        s3Link.href = 'https://d-92676bf303.awsapps.com/start/#/console?account_id=158692621672&role_name=CSAs_PS_access&destination=https%3A%2F%2Feu-west-1.console.aws.amazon.com%2Fs3%2Fbuckets%2Fcs-upload-bucket-prod%3Fregion%3Deu-west-1%26prefix%3Dhealthchecks%2F%26showversions%3Dfalse';
+      }
+
+      function upsertHistory(dbid) {
+        if (!dbid) return;
+        const history = loadHistory();
+        const next = [dbid, ...history.filter((x) => x !== dbid)];
+        saveHistory(next);
+        renderDatalist(next);
+      }
+
+      function go() {
+        const dbid = safeDbid(input.value);
+        if (!dbid) return;
+        upsertHistory(dbid);
+        setLinks(dbid);
+      }
+
+      function clearHistory() {
+        try { localStorage.removeItem(STORAGE_KEY); } catch (_) {}
+        renderDatalist([]);
+      }
+
+      // Init
+      const history = loadHistory();
+      renderDatalist(history);
+      if (history.length) {
+        input.value = history[0];
+        setLinks(history[0]);
+      }
+
+      // Events
+      goBtn.addEventListener('click', go);
+      clearBtn.addEventListener('click', clearHistory);
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          go();
+        }
+      });
+      input.addEventListener('change', () => {
+        const dbid = safeDbid(input.value);
+        if (dbid) {
+          upsertHistory(dbid);
+          setLinks(dbid);
+        }
+      });
+    })();
+  </script>
+</body>
+</html>
