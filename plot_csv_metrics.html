@@ -1,0 +1,586 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>CSV Metrics Timeline Canvas</title>
+  <script src="https://cdn.plot.ly/plotly-2.30.0.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <style>
+    :root { --bg:#0b1220; --panel:#101b32; --text:#e8eefc; --muted:#9bb0db; --accent:#7aa2ff; --border:rgba(255,255,255,.12); }
+    html,body{height:100%;}
+    body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;background:linear-gradient(180deg,var(--bg),#060a14);color:var(--text);}
+    .wrap{max-width:1200px;margin:0 auto;padding:24px;display:flex;flex-direction:column;gap:16px;}
+    .top{display:grid;grid-template-columns:1.2fr .8fr;gap:16px;align-items:start;}
+    @media (max-width: 980px){.top{grid-template-columns:1fr;}}
+    .card{background:rgba(16,27,50,.85);border:1px solid var(--border);border-radius:18px;box-shadow:0 10px 35px rgba(0,0,0,.35);}
+    .card .hd{padding:16px 16px 10px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:12px;}
+    .card .hd h1{font-size:16px;margin:0;letter-spacing:.2px;}
+    .card .hd .sub{font-size:12px;color:var(--muted);}
+    .card .bd{padding:16px;}
+    .drop{border:1px dashed rgba(255,255,255,.25);border-radius:16px;padding:18px;display:flex;flex-direction:column;gap:10px;align-items:flex-start;justify-content:center;min-height:120px;background:rgba(0,0,0,.12);}
+    .drop.dragover{border-color:var(--accent);background:rgba(122,162,255,.12);}
+    .btn{appearance:none;border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.08);color:var(--text);padding:10px 12px;border-radius:12px;cursor:pointer;font-weight:600;}
+    .btn:hover{border-color:rgba(255,255,255,.28);}
+    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;}
+    .pill{font-size:12px;border:1px solid rgba(255,255,255,.18);border-radius:999px;padding:6px 10px;color:var(--muted);}
+    label{font-size:12px;color:var(--muted);}
+    select,input[type="checkbox"]{accent-color:var(--accent);}
+    .list{display:flex;flex-direction:column;gap:8px;max-height:320px;overflow:auto;padding-right:6px;}
+    .item{display:flex;align-items:center;justify-content:space-between;gap:10px;border:1px solid rgba(255,255,255,.12);border-radius:14px;padding:10px 12px;background:rgba(0,0,0,.10);}
+    .item .meta{display:flex;flex-direction:column;gap:2px;min-width:0;}
+    .item .meta .name{font-weight:700;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:420px;}
+    .item .meta .desc{font-size:12px;color:var(--muted);}
+    .item .actions{display:flex;gap:10px;align-items:center;flex:0 0 auto;}
+    #plot{height:640px;}
+    .hint{font-size:12px;color:var(--muted);line-height:1.35;}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:12px;color:#cdd9ff;}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <div class="card">
+        <div class="hd">
+          <div>
+            <h1>CSV Metrics Timeline</h1>
+            <div class="sub">Drop any number of CSV files. Column 1 = epoch timestamp. Column 2 = value. Extra columns can be histogram bins or rate columns.</div>
+          </div>
+          <div class="row">
+            <button class="btn" id="clearBtn" title="Remove all loaded files">Clear</button>
+          </div>
+        </div>
+        <div class="bd">
+          <div class="drop" id="dropZone">
+            <div class="row">
+              <button class="btn" id="pickBtn">Choose CSV files…</button>
+              <input id="fileInput" type="file" accept=".csv,text/csv" multiple style="display:none" />
+              <span class="pill" id="loadedPill">0 files loaded</span>
+            </div>
+            <div class="hint">
+              <div>Expected format:</div>
+              <div class="mono">epoch,value</div>
+              <div class="mono">1735689600,123</div>
+              <div class="mono">1735689600000,123</div>
+              <div style="margin-top:8px">Histogram format (example):</div>
+              <div class="mono">epoch,bin_0_10,bin_10_20,bin_20_30</div>
+              <div style="margin-top:8px">Rate format (example):</div>
+              <div class="mono">epoch,value,rate</div>
+            </div>
+          </div>
+
+          <div style="height:14px"></div>
+
+          <div class="row" style="justify-content:space-between">
+            <div class="row" style="gap:14px">
+              <div class="row" style="gap:8px">
+                <label for="layoutMode">Layout</label>
+                <select id="layoutMode" class="btn" style="padding:8px 10px">
+                  <option value="overlay">Overlay (single chart)</option>
+                  <option value="subplots">Small multiples (stacked)</option>
+                </select>
+              </div>
+
+              <div class="row" style="gap:8px">
+                <input id="showRate" type="checkbox" />
+                <label for="showRate">Show rate of change</label>
+              </div>
+
+              <div class="row" style="gap:8px">
+                <input id="connectGaps" type="checkbox" />
+                <label for="connectGaps">Connect gaps</label>
+              </div>
+            </div>
+
+            <div class="row" style="gap:10px">
+              <button class="btn" id="exportPngBtn" title="Download plot as PNG">Export PNG</button>
+            </div>
+          </div>
+
+          <div style="height:14px"></div>
+
+          <div class="list" id="fileList"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="hd">
+          <div>
+            <h1>What gets plotted</h1>
+            <div class="sub">Heuristics</div>
+          </div>
+        </div>
+        <div class="bd hint">
+          <ul style="margin:0;padding-left:18px">
+            <li><b>2 columns</b> → time-series line.</li>
+            <li><b>3+ columns</b> → if headers look like bins/ranges → heatmap histogram; else treated as multi-series with value=col2 and rate=col3.</li>
+            <li><b>Rate toggle</b> → uses column 3 when present; otherwise computes d(value)/dt (per second).</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="hd">
+        <div>
+          <h1>Timeline</h1>
+          <div class="sub">Plotly (drag to zoom, double-click to reset)</div>
+        </div>
+      </div>
+      <div class="bd" style="padding:0">
+        <div id="plot"></div>
+      </div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const state = {
+    items: [],
+    layoutMode: 'overlay',
+    connectGaps: false,
+    showRate: false,
+  };
+
+  const $ = (id) => document.getElementById(id);
+  const dropZone = $('dropZone');
+  const pickBtn = $('pickBtn');
+  const fileInput = $('fileInput');
+  const fileList = $('fileList');
+  const loadedPill = $('loadedPill');
+  const clearBtn = $('clearBtn');
+  const layoutMode = $('layoutMode');
+  const showRate = $('showRate');
+  const connectGaps = $('connectGaps');
+  const exportPngBtn = $('exportPngBtn');
+
+  const uid = () => Math.random().toString(16).slice(2) + Date.now().toString(16);
+
+  function looksLikeHeader(firstRow) {
+    const nonEmpty = firstRow.filter(c => (c ?? '').toString().trim() !== '');
+    if (nonEmpty.length === 0) return false;
+    let votes = 0;
+    for (const cell of nonEmpty) {
+      const s = cell.toString().trim();
+      const n = Number(s);
+      const isNum = Number.isFinite(n) && s !== '';
+      const isDate = !Number.isFinite(n) && !Number.isNaN(Date.parse(s));
+      if (!isNum && !isDate) votes++;
+    }
+    return votes >= Math.max(1, Math.floor(nonEmpty.length / 2));
+  }
+
+  function coerceTime(values) {
+    // Epoch seconds or milliseconds; also supports ISO strings.
+    return values.map(v => {
+      if (v === null || v === undefined) return new Date(NaN);
+      const s = v.toString().trim();
+      if (s === '') return new Date(NaN);
+
+      const n = Number(s);
+      if (Number.isFinite(n)) {
+        const ms = n >= 1e12 ? n : n * 1000;  // ms vs seconds
+        return new Date(ms);
+      }
+
+      const t = Date.parse(s);
+      return Number.isNaN(t) ? new Date(NaN) : new Date(t);
+    });
+  }
+
+  function toNumber(v) {
+    if (v === null || v === undefined) return NaN;
+    const s = v.toString().trim();
+    if (s === '') return NaN;
+    const n = Number(s);
+    return Number.isFinite(n) ? n : NaN;
+  }
+
+  function normalizeRows(rows) {
+    const maxLen = Math.max(0, ...rows.map(r => r.length));
+    return rows.map(r => {
+      const rr = r.slice();
+      while (rr.length < maxLen) rr.push('');
+      return rr;
+    });
+  }
+
+  function inferKind(columns) {
+    if (columns.length <= 2) return 'timeseries';
+    const names = columns.slice(1).map(s => (s ?? '').toString().toLowerCase());
+    const binLike = names.filter(n => /\bbin\b|bucket|range|\d+\s*[-_–]\s*\d+|_\d+_\d+/.test(n)).length;
+    return binLike >= Math.max(2, Math.floor(names.length * 0.6)) ? 'hist' : 'multiseries';
+  }
+
+  function describeItem(item) {
+    if (item.kind === 'timeseries') {
+      const rateHint = item.rate ? ' • rate available' : '';
+      return `Time-series • ${item.x.length} points${rateHint}`;
+    }
+    if (item.kind === 'multiseries') {
+      const rateHint = item.rate ? ' • rate available' : '';
+      return `Multi-series • ${item.x.length} points${rateHint}`;
+    }
+    return `Histogram (heatmap) • ${item.x.length} timestamps • ${item.bins.length} bins`;
+  }
+
+  function setPill() {
+    loadedPill.textContent = `${state.items.length} file${state.items.length === 1 ? '' : 's'} loaded`;
+  }
+
+  function renderList() {
+    fileList.innerHTML = '';
+    if (state.items.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'hint';
+      empty.textContent = 'No files yet. Drop CSVs above to begin.';
+      fileList.appendChild(empty);
+      return;
+    }
+
+    for (const item of state.items) {
+      const row = document.createElement('div');
+      row.className = 'item';
+
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+
+      const name = document.createElement('div');
+      name.className = 'name';
+      name.textContent = item.name;
+
+      const desc = document.createElement('div');
+      desc.className = 'desc';
+      desc.textContent = describeItem(item);
+
+      meta.appendChild(name);
+      meta.appendChild(desc);
+
+      const actions = document.createElement('div');
+      actions.className = 'actions';
+
+      const chk = document.createElement('input');
+      chk.type = 'checkbox';
+      chk.checked = item.enabled;
+      chk.title = 'Toggle visibility';
+      chk.addEventListener('change', () => {
+        item.enabled = chk.checked;
+        draw();
+      });
+
+      const rm = document.createElement('button');
+      rm.className = 'btn';
+      rm.textContent = 'Remove';
+      rm.addEventListener('click', () => {
+        state.items = state.items.filter(x => x.id !== item.id);
+        setPill();
+        renderList();
+        draw();
+      });
+
+      actions.appendChild(chk);
+      actions.appendChild(rm);
+
+      row.appendChild(meta);
+      row.appendChild(actions);
+      fileList.appendChild(row);
+    }
+  }
+
+  function rateFromRaw(x, y) {
+    const out = new Array(y.length).fill(NaN);
+    for (let i = 1; i < y.length; i++) {
+      const t0 = x[i-1] instanceof Date ? x[i-1].getTime() : NaN;
+      const t1 = x[i] instanceof Date ? x[i].getTime() : NaN;
+      const dt = (t1 - t0) / 1000;
+      if (!Number.isFinite(dt) || dt === 0) continue;
+      const dy = y[i] - y[i-1];
+      out[i] = Number.isFinite(dy) ? (dy / dt) : NaN;
+    }
+    return out;
+  }
+
+  function yForItem(item) {
+    if (!state.showRate) return item.raw;
+    if (item.rate) return item.rate;
+    return rateFromRaw(item.x, item.raw);
+  }
+
+  function buildTracesOverlay(items) {
+    const traces = [];
+    for (const item of items) {
+      if (!item.enabled) continue;
+
+      if (item.kind === 'timeseries' || item.kind === 'multiseries') {
+        traces.push({
+          type: 'scattergl',
+          mode: 'lines+markers',
+          name: item.name,
+          x: item.x,
+          y: yForItem(item),
+          connectgaps: state.connectGaps,
+          hovertemplate: '%{x}<br>%{y}<extra>' + item.name + '</extra>'
+        });
+      } else {
+        traces.push({
+          type: 'heatmap',
+          name: item.name,
+          x: item.x,
+          y: item.bins,
+          z: item.z,
+          hovertemplate: '%{x}<br>%{y}: %{z}<extra>' + item.name + '</extra>',
+          showscale: true,
+          colorbar: { title: item.name }
+        });
+      }
+    }
+    return traces;
+  }
+
+  function buildTracesSubplots(items) {
+    const enabled = items.filter(i => i.enabled);
+    const traces = [];
+    const n = enabled.length;
+    const gap = 0.03;
+    const totalGap = gap * (n - 1);
+    const h = (1 - totalGap) / Math.max(1, n);
+
+    enabled.forEach((item, idx) => {
+      const axisSuffix = idx === 0 ? '' : String(idx + 1);
+      const yaxis = 'y' + axisSuffix;
+      const xaxis = 'x' + axisSuffix;
+
+      if (item.kind === 'timeseries' || item.kind === 'multiseries') {
+        traces.push({
+          type: 'scattergl',
+          mode: 'lines+markers',
+          name: item.name,
+          x: item.x,
+          y: yForItem(item),
+          xaxis, yaxis,
+          connectgaps: state.connectGaps,
+          hovertemplate: '%{x}<br>%{y}<extra>' + item.name + '</extra>'
+        });
+      } else {
+        traces.push({
+          type: 'heatmap',
+          name: item.name,
+          x: item.x,
+          y: item.bins,
+          z: item.z,
+          xaxis, yaxis,
+          hovertemplate: '%{x}<br>%{y}: %{z}<extra>' + item.name + '</extra>',
+          showscale: false
+        });
+      }
+    });
+
+    const layoutAxes = {};
+    enabled.forEach((item, idx) => {
+      const axisSuffix = idx === 0 ? '' : String(idx + 1);
+      const yName = 'yaxis' + axisSuffix;
+      const xName = 'xaxis' + axisSuffix;
+
+      const top = 1 - idx * (h + gap);
+      const bottom = top - h;
+
+      layoutAxes[yName] = {
+        domain: [bottom, top],
+        title: { text: (item.kind === 'hist') ? item.name : (state.showRate ? 'Rate' : 'Value'), standoff: 8 },
+        automargin: true
+      };
+      layoutAxes[xName] = {
+        domain: [0, 1],
+        anchor: 'y' + axisSuffix,
+        matches: idx === 0 ? undefined : 'x',
+        showticklabels: idx === enabled.length - 1,
+        automargin: true
+      };
+
+      if (item.kind === 'hist') layoutAxes[yName].type = 'category';
+    });
+
+    return { traces, layoutAxes };
+  }
+
+  function draw() {
+    const items = state.items;
+
+    const baseLayout = {
+      margin: { l: 70, r: 20, t: 20, b: 50 },
+      paper_bgcolor: 'rgba(0,0,0,0)',
+      plot_bgcolor: 'rgba(0,0,0,0)',
+      font: { color: '#e8eefc' },
+      legend: { orientation: 'h', x: 0, y: 1.15 },
+      hovermode: 'x unified'
+    };
+
+    let traces = [];
+    let layout = { ...baseLayout };
+
+    if (state.layoutMode === 'subplots') {
+      const { traces: t, layoutAxes } = buildTracesSubplots(items);
+      traces = t;
+      layout = { ...layout, ...layoutAxes, showlegend: false };
+      layout.hovermode = 'x';
+    } else {
+      traces = buildTracesOverlay(items);
+      const hasHeat = traces.some(tr => tr.type === 'heatmap');
+      layout.hovermode = hasHeat ? 'closest' : 'x unified';
+      layout.xaxis = { automargin: true, title: { text: 'Time' } };
+      layout.yaxis = { automargin: true, title: { text: (state.showRate ? 'Rate' : 'Value') } };
+    }
+
+    const config = {
+      responsive: true,
+      displaylogo: false,
+      modeBarButtonsToRemove: ['select2d','lasso2d']
+    };
+
+    Plotly.react('plot', traces, layout, config);
+  }
+
+  function parseFile(file) {
+    return new Promise((resolve, reject) => {
+      Papa.parse(file, {
+        skipEmptyLines: true,
+        dynamicTyping: false,
+        complete: (res) => resolve(res.data),
+        error: (err) => reject(err)
+      });
+    });
+  }
+
+  async function addFiles(files) {
+    const list = Array.from(files || []).filter(f => f && f.name && f.size > 0);
+    if (list.length === 0) return;
+
+    for (const file of list) {
+      try {
+        const raw = await parseFile(file);
+        const rows = normalizeRows(raw);
+        if (rows.length === 0) continue;
+
+        const header = looksLikeHeader(rows[0]);
+        const columns = header
+          ? rows[0].map((c, i) => ((c ?? '').toString().trim() || `col_${i+1}`))
+          : rows[0].map((_, i) => i === 0 ? 'epoch' : `col_${i+1}`);
+
+        const dataRows = header ? rows.slice(1) : rows;
+        const kind = inferKind(columns);
+
+        const xRaw = dataRows.map(r => r[0]);
+        const x = coerceTime(xRaw);
+
+        let item;
+        if (kind === 'timeseries') {
+          const rawSeries = dataRows.map(r => toNumber(r[1]));
+          item = {
+            id: uid(),
+            name: file.name,
+            kind,
+            columns,
+            x,
+            raw: rawSeries,
+            rate: null,
+            enabled: true
+          };
+        } else if (kind === 'multiseries') {
+          const rawSeries = dataRows.map(r => toNumber(r[1]));
+          const rateSeries = columns.length >= 3 ? dataRows.map(r => toNumber(r[2])) : null;
+          item = {
+            id: uid(),
+            name: file.name,
+            kind,
+            columns,
+            x,
+            raw: rawSeries,
+            rate: rateSeries,
+            enabled: true
+          };
+        } else {
+          const bins = columns.slice(1);
+          const z = bins.map((_, binIdx) => dataRows.map(r => toNumber(r[binIdx + 1])));
+          item = {
+            id: uid(),
+            name: file.name,
+            kind,
+            columns,
+            x,
+            z,
+            bins,
+            enabled: true
+          };
+        }
+
+        state.items.push(item);
+      } catch (e) {
+        console.error('Failed parsing', file.name, e);
+      }
+    }
+
+    setPill();
+    renderList();
+    draw();
+  }
+
+  pickBtn.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', (e) => addFiles(e.target.files));
+
+  ['dragenter','dragover'].forEach(ev => {
+    dropZone.addEventListener(ev, (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dropZone.classList.add('dragover');
+    });
+  });
+  ['dragleave','drop'].forEach(ev => {
+    dropZone.addEventListener(ev, (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dropZone.classList.remove('dragover');
+    });
+  });
+  dropZone.addEventListener('drop', (e) => {
+    const dt = e.dataTransfer;
+    if (dt && dt.files) addFiles(dt.files);
+  });
+
+  clearBtn.addEventListener('click', () => {
+    state.items = [];
+    setPill();
+    renderList();
+    draw();
+  });
+
+  layoutMode.addEventListener('change', () => {
+    state.layoutMode = layoutMode.value;
+    draw();
+  });
+
+  showRate.addEventListener('change', () => {
+    state.showRate = showRate.checked;
+    draw();
+  });
+
+  connectGaps.addEventListener('change', () => {
+    state.connectGaps = connectGaps.checked;
+    draw();
+  });
+
+  exportPngBtn.addEventListener('click', async () => {
+    const gd = document.getElementById('plot');
+    const url = await Plotly.toImage(gd, {format:'png',height:800,width:1400});
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'metrics-timeline.png';
+    a.click();
+  });
+
+  setPill();
+  renderList();
+  draw();
+})();
+</script>
+</body>
+</html>
