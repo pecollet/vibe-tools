@@ -8,6 +8,7 @@ A repository of small tools built using genAI
 - [query_log_timeline](https://pecollet.github.io/vibe-tools/query_log_timeline)
 - [query_log_swimlanes](https://pecollet.github.io/vibe-tools/query_log_swimlanes)
 - [aura_hc_shortcuts](https://pecollet.github.io/vibe-tools/aura_hc_shortcuts)
+- [hc_most_costly_2_desktop](https://pecollet.github.io/vibe-tools/hc_most_costly_2_desktop)
 
 ## Descriptions
 
@@ -30,3 +31,7 @@ View query executions in a swimlane chart
 ### [aura_hc_shortcuts](https://pecollet.github.io/vibe-tools/aura_hc_shortcuts)
 Common shortcuts to help go through the steps requied to perform an Aura Health Check.
 Includes links to Preset reports, SRE Portal, GCP bucket, HC S3 bucket...
+
+### [hc_most_costly_2_desktop](https://pecollet.github.io/vibe-tools/hc_most_costly_2_desktop)
+Get the list of ost cpostly queries from a Health Check report into Neo4j Desktop's Saved Cypher section.
+Drop the report zip file, export the CSV and import it into desktop.

@@ -1,0 +1,875 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Health Check Most costly queries -> Neo4j Desktop Saved Cypher</title>
+  <style>
+    :root {
+      --bg: #0b1020;
+      --panel: #121a33;
+      --panel-2: #0f1730;
+      --text: #e8eeff;
+      --muted: #a9b4d6;
+      --border: rgba(255,255,255,0.14);
+      --accent: #6aa8ff;
+      --good: #2de39c;
+      --bad: #ff5c7a;
+    }
+
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+      background: radial-gradient(1200px 800px at 20% 0%, #15224a 0%, var(--bg) 60%);
+      color: var(--text);
+    }
+
+    .wrap {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 28px 18px 40px;
+    }
+
+    h1 {
+      font-size: 22px;
+      margin: 0 0 14px;
+      letter-spacing: 0.2px;
+      font-weight: 700;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 12px;
+    }
+
+    .card {
+      background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02));
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 14px;
+      box-shadow: 0 12px 30px rgba(0,0,0,0.35);
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .meta {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .muted { color: var(--muted); font-size: 13px; }
+
+    .btns {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    button {
+      background: rgba(255,255,255,0.06);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 10px 12px;
+      border-radius: 12px;
+      cursor: pointer;
+      font-weight: 600;
+      transition: transform 120ms ease, background 120ms ease;
+    }
+
+    button:hover { transform: translateY(-1px); background: rgba(255,255,255,0.09); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+    .dropzone {
+      display: grid;
+      place-items: center;
+      padding: 28px;
+      background: linear-gradient(180deg, rgba(106,168,255,0.10), rgba(255,255,255,0.02));
+      border: 2px dashed rgba(106,168,255,0.45);
+      border-radius: 18px;
+      text-align: center;
+      user-select: none;
+    }
+
+    .dropzone.dragover {
+      border-color: rgba(45,227,156,0.8);
+      background: linear-gradient(180deg, rgba(45,227,156,0.14), rgba(255,255,255,0.02));
+    }
+
+    .dropzone strong { color: var(--accent); }
+
+    .status {
+      margin-top: 10px;
+      font-size: 13px;
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      justify-content: center;
+      min-height: 18px;
+      flex-wrap: wrap;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,0.05);
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .pill.good { color: var(--good); border-color: rgba(45,227,156,0.35); }
+    .pill.bad { color: var(--bad); border-color: rgba(255,92,122,0.35); }
+
+    .table-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-bottom: 10px;
+    }
+
+    .table-actions {
+      display: flex;
+      align-items: flex-start;
+      justify-content: flex-end;
+      gap: 24px;
+      flex-wrap: wrap;
+    }
+
+    .btn-export {
+      margin-top: 10px; /* vertical spacing above the button */
+    }
+
+    .import-help {
+      max-width: 520px;
+      text-align: right;
+      line-height: 1.35;
+      margin-top: 2px;
+    }
+
+    .import-icon {
+      margin: 0 6px;
+      vertical-align: -3px;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.6;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .table-wrap {
+      overflow: auto;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: rgba(0,0,0,0.12);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 900px;
+    }
+
+    thead th {
+      position: sticky;
+      top: 0;
+      background: rgba(18,26,51,0.95);
+      backdrop-filter: blur(6px);
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+      padding: 10px 12px;
+      font-size: 12px;
+      color: var(--muted);
+      letter-spacing: 0.3px;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    tbody td {
+      border-bottom: 1px solid rgba(255,255,255,0.07);
+      padding: 10px 12px;
+      vertical-align: top;
+      font-size: 13px;
+      line-height: 1.35;
+    }
+
+    tbody tr:hover td { background: rgba(255,255,255,0.04); }
+
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .right { text-align: right; white-space: nowrap; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Health Check Most costly queries -> Neo4j Desktop Saved Cypher</h1>
+
+    <div class="row">
+      <div class="card">
+        <div class="topbar">
+          <div class="meta">
+            <div class="muted">Drop a Health Check report <strong>.zip</strong> file.</div>
+            <div id="fileMeta" class="muted">No file loaded.</div>
+          </div>
+          <div class="btns">
+            <button id="btnPick" type="button">Choose zip…</button>
+            <input id="fileInput" type="file" accept=".zip,application/zip" style="display:none" />
+            <span id="countPill" class="pill">0 rows</span>
+          </div>
+        </div>
+
+        <div id="dropzone" class="dropzone" style="margin-top: 12px;">
+          <div>
+            <div style="font-size: 16px; font-weight: 700;">Drop your zip here</div>
+            <div class="muted" style="margin-top: 6px;">Or click <strong>Choose zip…</strong></div>
+            <div id="status" class="status"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="table-top">
+          <div style="font-weight: 700;">Most Costly Queries</div>
+          <div class="table-actions">
+            <button id="btnExport" class="btn-export" type="button" disabled>Export CSV</button>
+            <div class="muted import-help">
+              <strong>Import into Neo4j Browser:</strong> open the <em>Saved Cypher</em> panel, click the <em>Import saved cypher</em> icon
+              <svg class="import-icon" title="Import saved cypher" aria-label="Import saved cypher" width="18" height="18" viewBox="0 0 24 24">
+                <!-- Up arrow coming out of a thin tray (plate-like) -->
+                <path d="M12 17V6" />
+                <path d="M8.5 9.5 12 6l3.5 3.5" />
+                <path d="M5 19h14" />
+                <path d="M5 19v-1.4" />
+                <path d="M19 19v-1.4" />
+              </svg>
+              and select the exported CSV file.
+            </div>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>instance</th>
+                <th>query_name</th>
+                <th>cypher</th>
+                <th class="right">Cumulative Execution Time</th>
+              </tr>
+            </thead>
+            <tbody id="tbody">
+              <tr><td colspan="4" class="muted">Drop a Health Check report .zip file to load data.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    /**
+     * Fix for: TypeError: Cannot set properties of null (setting 'textContent')
+     * Root cause in previous version: the JS referenced an element that no longer existed in the HTML (e.g. #dbInfo).
+     * This version removes those references and adds safe DOM access helpers.
+     */
+
+    // ---------------------------
+    // DOM helpers
+    // ---------------------------
+    function mustGet(id) {
+      const el = document.getElementById(id);
+      if (!el) throw new Error(`Missing required element: #${id}`);
+      return el;
+    }
+
+    function safeGet(id) {
+      return document.getElementById(id) || null;
+    }
+
+    // ---------------------------
+    // DOM handles
+    // ---------------------------
+    const elDrop = mustGet('dropzone');
+    const elStatus = mustGet('status');
+    const elTbody = mustGet('tbody');
+    const elExport = mustGet('btnExport');
+    const elPick = mustGet('btnPick');
+    const elFileInput = mustGet('fileInput');
+    const elFileMeta = mustGet('fileMeta');
+    const elCountPill = mustGet('countPill');
+
+    // (Diagnostics UI removed; we keep tests running quietly)
+    const elDiag = safeGet('diag');
+    const elTests = safeGet('tests');
+
+    // ---------------------------
+    // State
+    // ---------------------------
+    let currentZipName = null;
+    /** @type {{instance: string, query_name: string, cypher: string, total_exec_time_ms: string}[]} */
+    let currentRows = [];
+
+    /** @type {string} */
+    let currentCustomer = '';
+    /** @type {Map<string,string>} */
+    let currentAdvertisedByInstance = new Map();
+
+    // ---------------------------
+    // Utilities
+    // ---------------------------
+    function escapeHtml(str) {
+      return String(str)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+    }
+
+    function setStatus(message, kind) {
+      // status is required by mustGet(), but keep this defensive in case the HTML gets edited later.
+      if (!elStatus) return;
+      if (!message) {
+        elStatus.innerHTML = '';
+        return;
+      }
+      const cls = kind === 'good' ? 'pill good' : (kind === 'bad' ? 'pill bad' : 'pill');
+      elStatus.innerHTML = `<span class="${cls}">${escapeHtml(message)}</span>`;
+    }
+
+    function toSafeString(x) {
+      if (x === null || x === undefined) return '';
+      return String(x);
+    }
+
+    function setRows(rows) {
+      currentRows = rows;
+      elExport.disabled = rows.length === 0 || !currentZipName;
+      elCountPill.textContent = `${rows.length} row${rows.length === 1 ? '' : 's'}`;
+
+      if (!rows.length) {
+        elTbody.innerHTML = `<tr><td colspan="4" class="muted">No rows found in most_costly_queries.</td></tr>`;
+        return;
+      }
+
+      const html = rows.map(r => {
+        return `
+          <tr>
+            <td>${escapeHtml(r.instance ?? '')}</td>
+            <td>${escapeHtml(r.query_name ?? '')}</td>
+            <td class="mono">${escapeHtml(r.cypher ?? '')}</td>
+            <td class="right">${escapeHtml(r.total_exec_time_ms ?? '')}</td>
+          </tr>
+        `;
+      }).join('');
+      elTbody.innerHTML = html;
+    }
+
+    function makeId() {
+      if (window.crypto?.randomUUID) return crypto.randomUUID();
+      return `id_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    }
+
+    function csvEscape(value) {
+      const s = value === null || value === undefined ? '' : String(value);
+      if (/[\n\r,\"]/g.test(s)) {
+        return '"' + s.replaceAll('"', '""') + '"';
+      }
+      return s;
+    }
+
+    function buildExportCsv(zipName, rows, opts) {
+      const header = ['name','description','query','id','parentId','isFolder'];
+      const rootId = makeId();
+
+      const customer = (opts?.customer ?? '').trim();
+      /** @type {Map<string,string>} */
+      const advertisedByInstance = opts?.advertisedByInstance instanceof Map ? opts.advertisedByInstance : new Map();
+
+      const instances = Array.from(
+        new Set(rows.map(r => (r.instance ?? '').trim()).filter(Boolean))
+      ).sort((a,b) => {
+        const an = Number(a);
+        const bn = Number(b);
+        const aNum = Number.isFinite(an) && String(an) === a;
+        const bNum = Number.isFinite(bn) && String(bn) === b;
+        if (aNum && bNum) return an - bn;
+        return a.localeCompare(b);
+      });
+
+      /** @type {Map<string,string>} */
+      const instanceIdByValue = new Map();
+      /** @type {string[][]} */
+      const lines = [];
+
+      // Root line: description from global_vars customer
+      lines.push([zipName || 'zip', customer, '', rootId, '', 'true']);
+
+      // Instance folder lines
+      for (const inst of instances) {
+        const instId = makeId();
+        instanceIdByValue.set(inst, instId);
+
+        // Name: "Instance #<instance+1>" when instance is numeric (0 -> Instance #1)
+        const n = parseInt(inst, 10);
+        const displayName =
+          Number.isFinite(n) && String(n) === inst
+            ? `Instance #${n + 1}`
+            : `Instance #${instanceIdByValue.size}`;
+
+        // Description: advertisedAddress
+        const descr = (advertisedByInstance.get(inst) ?? '').trim();
+
+        lines.push([displayName, descr, '', instId, rootId, 'true']);
+      }
+
+      // Row lines
+      for (const r of rows) {
+        const inst = (r.instance ?? '').trim();
+        const parentId = instanceIdByValue.get(inst) || rootId;
+        lines.push([
+          r.query_name ?? '',
+          '',
+          r.cypher ?? '',
+          makeId(),
+          parentId,
+          'false'
+        ]);
+      }
+
+      const csv = [
+        header.map(csvEscape).join(','),
+        ...lines.map(line => line.map(csvEscape).join(','))
+      ].join('\n');
+
+      return { csv, rootId };
+    }
+
+
+    function downloadText(filename, text) {
+      const blob = new Blob([text], { type: 'text/csv;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    // ---------------------------
+    // Script loader with fallbacks
+    // ---------------------------
+    function loadScript(url) {
+      return new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = url;
+        s.async = true;
+        s.onload = () => resolve(url);
+        s.onerror = () => reject(new Error(`Failed to load script: ${url}`));
+        document.head.appendChild(s);
+      });
+    }
+
+    async function ensureJSZip() {
+      if (window.JSZip) return window.JSZip;
+      const candidates = [
+        'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js',
+        'https://unpkg.com/jszip@3.10.1/dist/jszip.min.js',
+        'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js'
+      ];
+      let lastErr = null;
+      for (const url of candidates) {
+        try {
+          await loadScript(url);
+          if (window.JSZip) return window.JSZip;
+        } catch (e) {
+          lastErr = e;
+        }
+      }
+      throw lastErr || new Error('JSZip did not load.');
+    }
+
+    async function ensureSqlJs() {
+      if (window.initSqlJs) return window.initSqlJs;
+      const candidates = [
+        'https://sql.js.org/dist/sql-wasm.js',
+        'https://cdn.jsdelivr.net/npm/sql.js@1.11.0/dist/sql-wasm.js',
+        'https://unpkg.com/sql.js@1.11.0/dist/sql-wasm.js'
+      ];
+      let lastErr = null;
+      for (const url of candidates) {
+        try {
+          await loadScript(url);
+          if (window.initSqlJs) return window.initSqlJs;
+        } catch (e) {
+          lastErr = e;
+        }
+      }
+      throw lastErr || new Error('sql.js did not load.');
+    }
+
+    async function initSqlJsOnce() {
+      if (window.__sqljs) return window.__sqljs;
+      const init = await ensureSqlJs();
+      const SQL = await init({
+        locateFile: (file) => `https://sql.js.org/dist/${file}`
+      });
+      window.__sqljs = SQL;
+      return SQL;
+    }
+
+    async function ensureLibrariesForUserAction() {
+      const results = [];
+      await ensureJSZip();
+      results.push('JSZip: ok');
+      await ensureSqlJs();
+      results.push('sql.js: ok');
+      if (elDiag) elDiag.textContent = results.join(' · ');
+    }
+
+    // ---------------------------
+    // Core: handle zip
+    // ---------------------------
+    async function handleZipFile(file) {
+      try {
+        setStatus('Loading…', '');
+        setRows([]);
+
+        currentZipName = file.name;
+        currentCustomer = '';
+        currentAdvertisedByInstance = new Map();
+
+        elFileMeta.textContent = `Loaded: ${file.name} (${(file.size/1024/1024).toFixed(2)} MB)`;
+
+        await ensureLibrariesForUserAction();
+
+        const zipBuf = await file.arrayBuffer();
+        const zip = await window.JSZip.loadAsync(zipBuf);
+
+        // Find hc.db (supports nested paths)
+        let dbEntry = null;
+        zip.forEach((relativePath, entry) => {
+          const p = (relativePath || '').toLowerCase();
+          if (!dbEntry && entry && !entry.dir && (p === 'hc.db' || p.endsWith('/hc.db'))) {
+            dbEntry = entry;
+          }
+        });
+
+        if (!dbEntry) {
+          setStatus('Could not find hc.db inside the zip.', 'bad');
+          return;
+        }
+
+        const dbBytes = new Uint8Array(await dbEntry.async('arraybuffer'));
+        const SQL = await initSqlJsOnce();
+        const db = new SQL.Database(dbBytes);
+
+        const query = `
+          SELECT instance, query_name, cypher, total_exec_time_ms
+          FROM most_costly_queries
+          ORDER BY instance ASC, query_name ASC
+        `;
+
+        const res = db.exec(query);
+        const rows = [];
+
+        if (res && res.length && res[0].values) {
+          const cols = res[0].columns;
+          const idx = {
+            instance: cols.indexOf('instance'),
+            query_name: cols.indexOf('query_name'),
+            cypher: cols.indexOf('cypher'),
+            total_exec_time_ms: cols.indexOf('total_exec_time_ms'),
+          };
+
+          for (const v of res[0].values) {
+            rows.push({
+              instance: idx.instance >= 0 ? String(v[idx.instance] ?? '') : '',
+              query_name: idx.query_name >= 0 ? String(v[idx.query_name] ?? '') : '',
+              cypher: idx.cypher >= 0 ? String(v[idx.cypher] ?? '') : '',
+              total_exec_time_ms: idx.total_exec_time_ms >= 0 ? toSafeString(v[idx.total_exec_time_ms]) : ''
+            });
+          }
+        }
+
+        // Ensure deterministic ordering even if the DB collation differs.
+        rows.sort((a, b) => {
+          const ai = (a.instance ?? '').localeCompare(b.instance ?? '');
+          if (ai !== 0) return ai;
+          return (a.query_name ?? '').localeCompare(b.query_name ?? '');
+        });
+
+        // Enrich export metadata
+        try {
+          // Root description: customer
+          const custRes = db.exec("SELECT value FROM global_vars WHERE key='customer' LIMIT 1");
+          if (custRes?.length && custRes[0].values?.length) {
+            currentCustomer = toSafeString(custRes[0].values[0][0]).trim();
+          }
+
+          // Instance descriptions: advertisedAddress per instance
+          const instSet = Array.from(new Set(rows.map(r => (r.instance ?? '').trim()).filter(Boolean)));
+
+          const stmt = db.prepare("SELECT value FROM instance_vars WHERE key='advertisedAddress' AND instance = ? LIMIT 1");
+          try {
+            for (const inst of instSet) {
+              stmt.bind([inst]);
+              let val = '';
+              if (stmt.step()) {
+                const obj = stmt.getAsObject();
+                val = toSafeString(obj.value ?? '').trim();
+              }
+              stmt.reset();
+              if (val) currentAdvertisedByInstance.set(inst, val);
+            }
+          } finally {
+            stmt.free();
+          }
+        } catch (e) {
+          // Non-fatal: export will simply omit descriptions.
+          console.warn('Metadata enrichment failed:', e);
+        }
+
+        db.close();
+
+        setRows(rows);
+
+        setStatus('Loaded hc.db and queried most_costly_queries.', 'good');
+      } catch (err) {
+        console.error(err);
+        const msg = err?.message ? String(err.message) : String(err);
+        setStatus(`Error: ${msg}`, 'bad');
+      }
+    }
+
+    // ---------------------------
+    // Events
+    // ---------------------------
+    elPick.addEventListener('click', () => elFileInput.click());
+
+    elFileInput.addEventListener('change', (e) => {
+      const f = e.target.files && e.target.files[0];
+      if (f) handleZipFile(f);
+      e.target.value = '';
+    });
+
+    elExport.addEventListener('click', () => {
+      if (!currentZipName || !currentRows.length) return;
+      const { csv } = buildExportCsv(currentZipName, currentRows, {
+        customer: currentCustomer,
+        advertisedByInstance: currentAdvertisedByInstance
+      });
+
+      const outName = `${currentZipName.replace(/\.zip$/i,'') || 'export'}.csv`;
+      downloadText(outName, csv);
+    });
+
+    ['dragenter', 'dragover'].forEach(evt => {
+      elDrop.addEventListener(evt, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        elDrop.classList.add('dragover');
+      });
+    });
+
+    ['dragleave', 'drop'].forEach(evt => {
+      elDrop.addEventListener(evt, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        elDrop.classList.remove('dragover');
+      });
+    });
+
+    elDrop.addEventListener('drop', (e) => {
+      const dt = e.dataTransfer;
+      if (!dt) return;
+      const file = dt.files && dt.files[0];
+      if (!file) return;
+      if (!/\.zip$/i.test(file.name) && file.type !== 'application/zip') {
+        setStatus('Please drop a .zip file.', 'bad');
+        return;
+      }
+      handleZipFile(file);
+    });
+
+    window.addEventListener('dragover', (e) => e.preventDefault());
+    window.addEventListener('drop', (e) => e.preventDefault());
+
+    // ---------------------------
+    // Tests (no framework) — kept, but run silently (no diagnostics UI)
+    // ---------------------------
+    function assert(name, condition) {
+      if (!condition) throw new Error(`Test failed: ${name}`);
+      // If someone later reintroduces #tests, we'll also render results.
+      if (elTests) {
+        const line = document.createElement('div');
+        line.textContent = '✔ ' + name;
+        elTests.appendChild(line);
+      }
+    }
+
+    function parseCsv(csv) {
+      const rows = [];
+      let cur = [];
+      let field = '';
+      let inQuotes = false;
+      for (let i = 0; i < csv.length; i++) {
+        const ch = csv[i];
+        const next = csv[i + 1];
+        if (inQuotes) {
+          if (ch === '"' && next === '"') {
+            field += '"';
+            i++;
+          } else if (ch === '"') {
+            inQuotes = false;
+          } else {
+            field += ch;
+          }
+        } else {
+          if (ch === '"') {
+            inQuotes = true;
+          } else if (ch === ',') {
+            cur.push(field);
+            field = '';
+          } else if (ch === '\n') {
+            cur.push(field);
+            rows.push(cur);
+            cur = [];
+            field = '';
+          } else if (ch === '\r') {
+            // ignore
+          } else {
+            field += ch;
+          }
+        }
+      }
+      cur.push(field);
+      rows.push(cur);
+      return rows;
+    }
+
+    function runTests() {
+      // Test 1: header + root + instance grouping + per-row parenting
+      {
+        const zipName = 'sample.zip';
+        const rows = [
+          { instance: 'a', query_name: 'q1', cypher: 'MATCH (n) RETURN n', total_exec_time_ms: '1' },
+          { instance: 'a', query_name: 'q2', cypher: 'RETURN 2', total_exec_time_ms: '2' },
+          { instance: 'b', query_name: 'q3', cypher: 'RETURN 3', total_exec_time_ms: '3' },
+        ];
+        const { csv } = buildExportCsv(zipName, rows);
+        const parsed = parseCsv(csv);
+
+        assert('CSV has header', parsed[0].join(',') === 'name,description,query,id,parentId,isFolder');
+        assert('CSV has root + 2 instances + 3 rows = 6 lines total', parsed.length === 1 + 1 + 2 + 3);
+
+        const header = parsed[0];
+        const idx = Object.fromEntries(header.map((h, i) => [h, i]));
+
+        const rootLine = parsed[1];
+        const rootId = rootLine[idx.id];
+        assert('Root line name == zip filename', rootLine[idx.name] === zipName);
+        assert('Root line isFolder == true', rootLine[idx.isFolder] === 'true');
+        assert('Root line parentId empty', rootLine[idx.parentId] === '');
+        assert('Root line has id', !!rootId);
+
+        // next 2 lines are instance folders (sorted: a then b)
+        const instA = parsed[2];
+        const instB = parsed[3];
+        assert('Instance folder A parentId == rootId', instA[idx.parentId] === rootId);
+        assert('Instance folder B parentId == rootId', instB[idx.parentId] === rootId);
+        assert('Instance folder isFolder == true', instA[idx.isFolder] === 'true' && instB[idx.isFolder] === 'true');
+        assert('Instance folder names are a then b', instA[idx.name] === 'a' && instB[idx.name] === 'b');
+
+        const aId = instA[idx.id];
+        const bId = instB[idx.id];
+
+        const leaf1 = parsed[4];
+        const leaf2 = parsed[5];
+        const leaf3 = parsed[6];
+
+        assert('Leaf lines have isFolder == false', leaf1[idx.isFolder] === 'false' && leaf2[idx.isFolder] === 'false' && leaf3[idx.isFolder] === 'false');
+        assert('Leaf parentIds map to correct instance folder',
+          (leaf1[idx.parentId] === aId) &&
+          (leaf2[idx.parentId] === aId) &&
+          (leaf3[idx.parentId] === bId)
+        );
+
+        assert('Leaf query column contains cypher', leaf1[idx.query] === 'MATCH (n) RETURN n');
+      }
+
+      // Test 1b: sorting by instance then query_name (ascending)
+      {
+        const rows = [
+          { instance: 'b', query_name: 'bq', cypher: '', total_exec_time_ms: '0' },
+          { instance: 'a', query_name: 'zq', cypher: '', total_exec_time_ms: '0' },
+          { instance: 'a', query_name: 'aq', cypher: '', total_exec_time_ms: '0' },
+          { instance: 'b', query_name: 'aq', cypher: '', total_exec_time_ms: '0' },
+        ];
+        rows.sort((a, b) => {
+          const ai = (a.instance ?? '').localeCompare(b.instance ?? '');
+          if (ai !== 0) return ai;
+          return (a.query_name ?? '').localeCompare(b.query_name ?? '');
+        });
+        const order = rows.map(r => `${r.instance}/${r.query_name}`).join('|');
+        assert('Sort order is a/aq, a/zq, b/aq, b/bq', order === 'a/aq|a/zq|b/aq|b/bq');
+      }
+
+      // Test 2: CSV escaping for commas/quotes/newlines
+      {
+        const zipName = 'z.zip';
+        const rows = [
+          { instance: 'inst', query_name: 'name,with,commas', cypher: 'RETURN "a,b"\nRETURN 2', total_exec_time_ms: '0' },
+        ];
+        const { csv } = buildExportCsv(zipName, rows);
+        const parsed = parseCsv(csv);
+        const header = parsed[0];
+        const idx = Object.fromEntries(header.map((h, i) => [h, i]));
+
+        // root + inst + leaf
+        assert('Escaping test has 4 lines', parsed.length === 4);
+        assert('Query name preserved after parse', parsed[3][idx.name] === 'name,with,commas');
+        assert('Cypher preserved after parse', parsed[3][idx.query] === 'RETURN "a,b"\nRETURN 2');
+      }
+
+      // Test 3: empty/blank instance values should not create instance folders
+      {
+        const rows = [
+          { instance: '', query_name: 'q', cypher: 'RETURN 1', total_exec_time_ms: '0' },
+          { instance: '   ', query_name: 'q2', cypher: 'RETURN 2', total_exec_time_ms: '0' },
+        ];
+        const { csv } = buildExportCsv('x.zip', rows);
+        const parsed = parseCsv(csv);
+        // header + root + 2 leaf rows (no instance folders) = 4
+        assert('Blank instances do not create folders', parsed.length === 4);
+      }
+    }
+
+    try {
+      runTests();
+    } catch (e) {
+      console.warn(e);
+    }
+  </script>
+</body>
+</html>
