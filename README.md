@@ -31,7 +31,14 @@ View query executions in a swimlane chart
 ### [aura_hc_shortcuts](https://pecollet.github.io/vibe-tools/aura_hc_shortcuts)
 Common shortcuts to help go through the steps requied to perform an Aura Health Check.
 Includes links to Preset reports, SRE Portal, GCP bucket, HC S3 bucket...
+<img width="1601" height="374" alt="image" src="https://github.com/user-attachments/assets/fa9d12a8-2709-44e9-a350-9a199237e4a9" />
+
 
 ### [hc_most_costly_2_desktop](https://pecollet.github.io/vibe-tools/hc_most_costly_2_desktop)
-Get the list of ost cpostly queries from a Health Check report into Neo4j Desktop's Saved Cypher section.
+Get the list of most costly queries from a Health Check report into Neo4j Desktop's Saved Cypher section.
 Drop the report zip file, export the CSV and import it into desktop.
+<img width="1245" height="848" alt="image" src="https://github.com/user-attachments/assets/ff11914c-b613-4dd7-899c-58f465446424" />
+<img width="1362" height="648" alt="image" src="https://github.com/user-attachments/assets/b809f510-7813-4220-9a32-5976d16b80a3" />
+
+
+
