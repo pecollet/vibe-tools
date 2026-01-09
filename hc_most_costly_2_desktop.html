@@ -216,6 +216,106 @@
     }
 
     .right { text-align: right; white-space: nowrap; }
+
+    .data-content {
+      display: grid;
+      grid-template-columns: 1fr 320px;
+      gap: 12px;
+      align-items: start;
+    }
+
+    @media (max-width: 1400px) {
+      .data-content {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .tree-panel {
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: rgba(0,0,0,0.12);
+      overflow: auto;
+      max-height: 600px;
+      font-size: 13px;
+    }
+
+    .tree-panel-header {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(18,26,51,0.95);
+      position: sticky;
+      top: 0;
+      font-weight: 700;
+      color: var(--muted);
+      text-transform: uppercase;
+      font-size: 12px;
+      letter-spacing: 0.3px;
+      white-space: nowrap;
+    }
+
+    .tree-content {
+      padding: 8px 0;
+    }
+
+    .tree-item {
+      padding: 6px 8px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      user-select: none;
+      color: var(--muted);
+      transition: color 120ms ease, background 120ms ease;
+    }
+
+    .tree-item:hover {
+      background: rgba(255,255,255,0.06);
+      color: var(--text);
+    }
+
+    .tree-item.folder {
+      color: var(--accent);
+    }
+
+    .tree-item.folder:hover {
+      color: #8ab8ff;
+    }
+
+    .tree-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 18px;
+      height: 18px;
+      flex-shrink: 0;
+      font-size: 11px;
+      font-weight: 700;
+      color: currentColor;
+      transition: transform 100ms ease;
+    }
+
+    .tree-item.collapsed .tree-icon {
+      transform: rotate(-90deg);
+    }
+
+    .tree-name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex-grow: 1;
+    }
+
+    .tree-children {
+      display: none;
+    }
+
+    .tree-item.expanded ~ .tree-children {
+      display: block;
+    }
+
+    .tree-children {
+      padding-left: 18px;
+    }
   </style>
 </head>
 <body>
@@ -249,9 +349,9 @@
         <div class="table-top">
           <div style="font-weight: 700;">Most Costly Queries</div>
           <div class="table-actions">
-            <button id="btnExport" class="btn-export" type="button" disabled>Export CSV</button>
+            <button id="btnExport" class="btn-export" type="button" disabled>Export CSV for Neo4j Browser/Query</button>
             <div class="muted import-help">
-              <strong>Import into Neo4j Browser:</strong> open the <em>Saved Cypher</em> panel, click the <em>Import saved cypher</em> icon
+              <strong>Import into Neo4j Browser or Query:</strong> open the <em>Saved Cypher</em> panel, click the <em>Import saved cypher</em> icon
               <svg class="import-icon" title="Import saved cypher" aria-label="Import saved cypher" width="18" height="18" viewBox="0 0 24 24">
                 <!-- Up arrow coming out of a thin tray (plate-like) -->
                 <path d="M12 17V6" />
@@ -265,20 +365,29 @@
           </div>
         </div>
 
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>instance</th>
-                <th>query_name</th>
-                <th>cypher</th>
-                <th class="right">Cumulative Execution Time</th>
-              </tr>
-            </thead>
-            <tbody id="tbody">
-              <tr><td colspan="4" class="muted">Drop a Health Check report .zip file to load data.</td></tr>
-            </tbody>
-          </table>
+        <div class="data-content">
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>instance</th>
+                  <th>query_name</th>
+                  <th>cypher</th>
+                  <th class="right">Cumulative Execution Time</th>
+                </tr>
+              </thead>
+              <tbody id="tbody">
+                <tr><td colspan="4" class="muted">Drop a Health Check report .zip file to load data.</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="tree-panel">
+            <div class="tree-panel-header">Target "Saved Cypher" Hierarchy</div>
+            <div id="treeView" class="tree-content">
+              <div class="muted" style="padding: 8px 12px; font-size: 12px;">Load data to view tree</div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -315,6 +424,7 @@
     const elFileInput = mustGet('fileInput');
     const elFileMeta = mustGet('fileMeta');
     const elCountPill = mustGet('countPill');
+    const elTreeView = mustGet('treeView');
 
     // (Diagnostics UI removed; we keep tests running quietly)
     const elDiag = safeGet('diag');
@@ -355,6 +465,81 @@
       elStatus.innerHTML = `<span class="${cls}">${escapeHtml(message)}</span>`;
     }
 
+    function renderTree(rows) {
+      if (!rows.length) {
+        elTreeView.innerHTML = '<div class="muted" style="padding: 8px 12px; font-size: 12px;">No data to display</div>';
+        return;
+      }
+
+      // Build hierarchy: root -> instances -> queries
+      const instances = Array.from(
+        new Set(rows.map(r => (r.instance ?? '').trim()).filter(Boolean))
+      ).sort((a, b) => {
+        const an = Number(a);
+        const bn = Number(b);
+        const aNum = Number.isFinite(an) && String(an) === a;
+        const bNum = Number.isFinite(bn) && String(bn) === b;
+        if (aNum && bNum) return an - bn;
+        return a.localeCompare(b);
+      });
+
+      const html = [];
+      
+      // Root folder
+      const rootId = `root-${Date.now()}`;
+      html.push(`
+        <div class="tree-item expanded folder" data-toggle="${rootId}">
+          <div class="tree-icon">▼</div>
+          <div class="tree-name">${escapeHtml(currentZipName || 'Queries')}</div>
+        </div>
+        <div class="tree-children" id="${rootId}">
+      `);
+
+      // Instance folders and their queries
+      for (const inst of instances) {
+        const instId = `inst-${escapeHtml(inst)}-${Date.now()}`;
+        const instLabel = inst || '(no instance)';
+        
+        html.push(`
+          <div class="tree-item collapsed folder" data-toggle="${instId}">
+            <div class="tree-icon">▶</div>
+            <div class="tree-name">Instance #${escapeHtml(inst)}</div>
+          </div>
+          <div class="tree-children" id="${instId}">
+        `);
+
+        // Queries in this instance
+        const instRows = rows.filter(r => (r.instance ?? '').trim() === inst);
+        for (const row of instRows) {
+          html.push(`
+            <div class="tree-item">
+              <div class="tree-icon" style="visibility: hidden;"></div>
+              <div class="tree-name">${escapeHtml(row.query_name || 'Unnamed')}</div>
+            </div>
+          `);
+        }
+
+        html.push('</div>');
+      }
+
+      html.push('</div>');
+
+      elTreeView.innerHTML = html.join('');
+
+      // Add toggle listeners
+      elTreeView.querySelectorAll('.tree-item.folder').forEach(item => {
+        item.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const toggleId = item.getAttribute('data-toggle');
+          const childContainer = document.getElementById(toggleId);
+          if (childContainer) {
+            item.classList.toggle('collapsed');
+            item.classList.toggle('expanded');
+          }
+        });
+      });
+    }
+
     function toSafeString(x) {
       if (x === null || x === undefined) return '';
       return String(x);
@@ -367,6 +552,7 @@
 
       if (!rows.length) {
         elTbody.innerHTML = `<tr><td colspan="4" class="muted">No rows found in most_costly_queries.</td></tr>`;
+        renderTree(rows);
         return;
       }
 
@@ -381,6 +567,8 @@
         `;
       }).join('');
       elTbody.innerHTML = html;
+
+      renderTree(rows);
     }
 
     function makeId() {
@@ -421,30 +609,79 @@
       const lines = [];
 
       // Root line: description from global_vars customer
-      lines.push([zipName || 'zip', customer, '', rootId, '', 'true']);
+      root_name = `${customer} - ${zipName || 'zip'}`;
+      lines.push([root_name, customer, '', rootId, '', 'true']);
 
       // Instance folder lines
       for (const inst of instances) {
         const instId = makeId();
         instanceIdByValue.set(inst, instId);
 
+        // Description: advertisedAddress
+        const descr = (advertisedByInstance.get(inst) ?? '').trim();
+
         // Name: "Instance #<instance+1>" when instance is numeric (0 -> Instance #1)
         const n = parseInt(inst, 10);
         const displayName =
           Number.isFinite(n) && String(n) === inst
-            ? `Instance #${n + 1}`
+            ? `Instance #${n + 1} [${descr || 'no advertised address'}]`
             : `Instance #${instanceIdByValue.size}`;
 
-        // Description: advertisedAddress
-        const descr = (advertisedByInstance.get(inst) ?? '').trim();
+
 
         lines.push([displayName, descr, '', instId, rootId, 'true']);
+      }
+
+      // Helpers for parameter companion lines
+      function extractCypherParams(cypher) {
+        const text = String(cypher ?? '');
+        // Best-effort: find Cypher params like $varName (doesn't parse strings/comments)
+        const matches = text.match(/\$[A-Za-z_][A-Za-z0-9_]*/g) || [];
+        const uniq = [];
+        const seen = new Set();
+        for (const m of matches) {
+          const name = m.slice(1);
+          if (!seen.has(name)) {
+            seen.add(name);
+            uniq.push(name);
+          }
+        }
+        return uniq;
+      }
+
+      function guessedParamValueLiteral(name) {
+        const n = String(name).toLowerCase();
+        if (n.includes('id') || n.endsWith('ids') || n.endsWith('_id')) return '1';
+        if (n.includes('count') || n.includes('limit') || n.includes('skip') || n.includes('size')) return '10';
+        if (n.includes('date') || n.includes('time')) return '"2026-01-01"';
+        if (n.includes('name') || n.includes('type') || n.includes('label') || n.includes('key')) return '"example"';
+        if (n.includes('enabled') || n.startsWith('is') || n.startsWith('has')) return 'true';
+        return '"value"';
+      }
+
+      function buildParamQuery(paramNames) {
+        const parts = paramNames.map(p => `${p}: ${guessedParamValueLiteral(p)}`);
+        return `:param { ${parts.join(', ')} }`;
       }
 
       // Row lines
       for (const r of rows) {
         const inst = (r.instance ?? '').trim();
         const parentId = instanceIdByValue.get(inst) || rootId;
+
+        // Companion parameters line (if query contains $params)
+        const params = extractCypherParams(r.cypher ?? '');
+        if (params.length) {
+          lines.push([
+            `${r.query_name ?? ''} set parameters`,
+            '',
+            buildParamQuery(params),
+            makeId(),
+            parentId,
+            'false'
+          ]);
+        }
+        // Main query line
         lines.push([
           r.query_name ?? '',
           '',
@@ -454,6 +691,7 @@
           'false'
         ]);
       }
+
 
       const csv = [
         header.map(csvEscape).join(','),
@@ -863,6 +1101,25 @@
         // header + root + 2 leaf rows (no instance folders) = 4
         assert('Blank instances do not create folders', parsed.length === 4);
       }
+      // Test 4: param companion line added after queries containing $parameters
+      {
+        const rows = [
+          { instance: 'i', query_name: 'Q', cypher: 'MATCH (n) WHERE n.id = $id AND n.name = $name RETURN n', total_exec_time_ms: '0' },
+          { instance: 'i', query_name: 'NoParams', cypher: 'RETURN 1', total_exec_time_ms: '0' },
+        ];
+        const { csv } = buildExportCsv('p.zip', rows);
+        const parsed = parseCsv(csv);
+        const header = parsed[0];
+        const idx = Object.fromEntries(header.map((h, i) => [h, i]));
+
+        // header + root + instance folder + Q + Q params + NoParams = 6
+        assert('Param companion adds one extra line', parsed.length === 6);
+        assert('Companion line name is "Q set parameters"', parsed[4][idx.name] === 'Q set parameters');
+        assert('Companion line query starts with :param', parsed[4][idx.query].startsWith(':param {'));
+        assert('Companion line isFolder is false', parsed[4][idx.isFolder] === 'false');
+        assert('Companion line parentId equals main query parentId', parsed[4][idx.parentId] === parsed[3][idx.parentId]);
+      }
+
     }
 
     try {
