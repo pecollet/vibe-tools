@@ -37,8 +37,8 @@ Includes links to Preset reports, SRE Portal, GCP bucket, HC S3 bucket...
 ### [hc_most_costly_2_desktop](https://pecollet.github.io/vibe-tools/hc_most_costly_2_desktop)
 Get the list of most costly queries from a Health Check report into Neo4j Desktop's Saved Cypher section.
 Drop the report zip file, export the CSV and import it into desktop.
-<img width="1245" height="848" alt="image" src="https://github.com/user-attachments/assets/ff11914c-b613-4dd7-899c-58f465446424" />
-<img width="1362" height="648" alt="image" src="https://github.com/user-attachments/assets/b809f510-7813-4220-9a32-5976d16b80a3" />
+<img width="994" height="799" alt="image" src="https://github.com/user-attachments/assets/f01d59c3-868e-4520-85ba-94ebebc04347" />
+<img width="1294" height="484" alt="image" src="https://github.com/user-attachments/assets/2e5fb8f9-8c6c-4e69-9a35-55e9d335f5d2" />
 
 
 
