@@ -32,9 +32,6 @@ This repository contains standalone HTML-based data visualization and utility to
 
 ### Data Visualization
 - Plotly.js for interactive charts (timelines, histograms, swimlanes)
-- Automatic layout detection: overlay vs. subplots
-- Rate calculation and histogram binning heuristics
-- Export functionality (PNG download)
 
 ### UI Components
 - Card-based layout with `.card`, `.hd` (header), `.bd` (body) structure
@@ -68,3 +65,11 @@ This repository contains standalone HTML-based data visualization and utility to
 - For new tools: Copy structure from `plot_csv_metrics.html` and modify data processing logic
 - File upload: See `dropZone` event handlers in any tool
 - Plotting: Use `Plotly.newPlot()` with data arrays and layout objects
+
+## CYPHER Queries
+Some tools generate CYPHER queries for Neo4j. Use the following conventions:
+- Pretty print the queries with indentation and line breaks.
+- capitalise key words (MATCH, RETURN, WHERE, WITH, CALL, CREATE, MERGE, SET, DELETE)
+- For queries writing data, use batches with `CALL { ... } IN TRANSATIONS OF 1000 ROWS` to avoid memory issues
+- For queries writing nodes, also use concurrency with `CALL { ... } IN CONCURRENT TRANSATIONS OF 1000 ROWS`
+- use CYPHER comments (`//`) to explain non-trivial parts of the queries
