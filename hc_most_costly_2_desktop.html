@@ -872,8 +872,8 @@
             const count = countSlider ? parseInt(countSlider.value) : 0;
             if (count > 0) {
               const properties = [];
-              const table = item.querySelector('.model-table');
-              if (table) {
+              const table = item.nextElementSibling;
+              if (table && table.tagName === 'TABLE' && table.classList.contains('model-table')) {
                 table.querySelectorAll('tbody tr').forEach(row => {
                   const cells = row.querySelectorAll('td');
                   if (cells.length >= 5) {
@@ -938,8 +938,8 @@
             const target = targetSelect ? targetSelect.value : '';
             if (count > 0 && source && target) {
               const properties = [];
-              const table = item.querySelector('.model-table');
-              if (table) {
+              const table = item.nextElementSibling;
+              if (table && table.tagName === 'TABLE' && table.classList.contains('model-table')) {
                 table.querySelectorAll('tbody tr').forEach(row => {
                   const cells = row.querySelectorAll('td');
                   if (cells.length >= 5) {
@@ -1173,16 +1173,15 @@
         const count = info.count;
         if (count > 0) {
           const props = info.properties || [];
-          let propStr = '';
+          let createStmt = `CREATE (n:${label})`;
           if (props.length > 0) {
-            const propAssignments = props.map(p => {
+            const setAssignments = props.map(p => {
               const value = generateValueExpression(p);
-              return `${p.key}: ${value}`;
+              return `n.${p.key} = ${value}`;
             });
-            propStr = ` {\n\t\t${propAssignments.join(',\n\t\t')}\n\t}`;
+            createStmt += `\n\t\tSET ${setAssignments.join(', ')}`;
           }
           
-          const createStmt = `CREATE (n:${label}${propStr})`;
           const batched = `UNWIND range(1, ${count}) AS i\nCALL {\n\t\t${createStmt}\n} IN CONCURRENT TRANSACTIONS OF 1000 ROWS`;
           statements.push(batched);
         }
@@ -1195,17 +1194,16 @@
         const targetLabel = info.target;
         if (count > 0 && sourceLabel && targetLabel) {
           const props = info.properties || [];
-          let propStr = '';
+          let createStmt = `MATCH (s:${sourceLabel}), (t:${targetLabel})\n\tWITH s, t ORDER BY rand() LIMIT 1\n\tCREATE (s)-[r:${type}]->(t)`;
           if (props.length > 0) {
-            const propAssignments = props.map(p => {
+            const setAssignments = props.map(p => {
               const value = generateValueExpression(p);
-              return `${p.key}: ${value}`;
+              return `r.${p.key} = ${value}`;
             });
-            propStr = ` {\n\t\t${propAssignments.join(',\n\t\t')}\n\t}`;
+            createStmt += `\n\tSET ${setAssignments.join(', ')}`;
           }
           
-          const matchStmt = `MATCH (s:${sourceLabel}), (t:${targetLabel})\n\tWITH s, t ORDER BY rand() LIMIT 1\n\tCREATE (s)-[r:${type}${propStr}]->(t)`;
-          const batched = `UNWIND range(1, ${count}) AS i\nCALL {\n\t${matchStmt}\n} IN TRANSACTIONS OF 1000 ROWS`;
+          const batched = `UNWIND range(1, ${count}) AS i\nCALL {\n\t${createStmt}\n} IN TRANSACTIONS OF 1000 ROWS`;
           statements.push(batched);
         }
       }
