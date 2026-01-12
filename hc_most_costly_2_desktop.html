@@ -609,11 +609,18 @@
 
     function getTemplateOptions(type) {
       if (type === 'String') {
-        return ['uuid', 'string from list', 'person name', 'city', 'country', 'IP address'];
+        return [
+          'uuid', 'string from list', 'person name', 'city', 'country', 'IP address',
+          'faker.person.firstName', 'faker.person.lastName', 'faker.person.fullName',
+          'faker.address.city', 'faker.address.country', 'faker.address.streetAddress',
+          'faker.internet.email', 'faker.internet.url', 'faker.internet.ip',
+          'faker.company.name', 'faker.company.catchPhrase', 'faker.lorem.words',
+          'faker.phone.number', 'faker.finance.accountNumber'
+        ];
       } else if (type === 'Boolean') {
         return ['always TRUE', 'always FALSE', 'random'];
       } else if (type === 'DateTime') {
-        return ['random datetime', 'datetime from list'];
+        return ['random datetime', 'datetime from list', 'faker.date.past', 'faker.date.future', 'faker.date.recent'];
       } else if (type === 'Point') {
         return ['random point'];
       } else {
@@ -993,8 +1000,16 @@
       return config;
     }
 
-    function generateSyntheticDataCypher(config) {
+    async function generateSyntheticDataCypher(config) {
       if (!config) return '';
+      
+      // Ensure Faker is loaded
+      let faker = null;
+      try {
+        faker = await ensureFaker();
+      } catch (e) {
+        console.warn('Faker not available, using fallback values');
+      }
       
       const statements = [];
       
@@ -1015,6 +1030,96 @@
           case 'string from list':
             const list = propCfg.list || ['value1', 'value2', 'value3'];
             return `["${list.join('","')}"] [toInteger(rand() * ${list.length})]`;
+          case 'faker.person.firstName':
+            if (faker) {
+              const names = Array.from({length: 20}, () => faker.name.firstName());
+              return `["${names.join('","')}"] [toInteger(rand() * 20)]`;
+            }
+            return `["John","Jane","Michael","Sarah","David","Lisa","Robert","Maria","James","Anna","William","Emma","Christopher","Olivia","Daniel","Sophia","Matthew","Isabella","Anthony","Ava"][toInteger(rand() * 20)]`;
+          case 'faker.person.lastName':
+            if (faker) {
+              const names = Array.from({length: 20}, () => faker.name.lastName());
+              return `["${names.join('","')}"] [toInteger(rand() * 20)]`;
+            }
+            return `["Smith","Johnson","Williams","Brown","Jones","Garcia","Miller","Davis","Rodriguez","Martinez","Hernandez","Lopez","Gonzalez","Wilson","Anderson","Thomas","Taylor","Moore","Jackson","Martin"][toInteger(rand() * 20)]`;
+          case 'faker.person.fullName':
+            if (faker) {
+              const names = Array.from({length: 10}, () => faker.name.findName());
+              return `["${names.join('","')}"] [toInteger(rand() * 10)]`;
+            }
+            return `["John Smith","Jane Johnson","Michael Williams","Sarah Brown","David Jones","Lisa Garcia","Robert Miller","Maria Davis","James Rodriguez","Anna Martinez"][toInteger(rand() * 10)]`;
+          case 'faker.address.city':
+            if (faker) {
+              const cities = Array.from({length: 20}, () => faker.address.city());
+              return `["${cities.join('","')}"] [toInteger(rand() * 20)]`;
+            }
+            return `["New York","Los Angeles","Chicago","Houston","Phoenix","Philadelphia","San Antonio","San Diego","Dallas","San Jose","Austin","Jacksonville","Fort Worth","Columbus","Charlotte","San Francisco","Indianapolis","Seattle","Denver","Boston"][toInteger(rand() * 20)]`;
+          case 'faker.address.country':
+            if (faker) {
+              const countries = Array.from({length: 20}, () => faker.address.country());
+              return `["${countries.join('","')}"] [toInteger(rand() * 20)]`;
+            }
+            return `["United States","Canada","United Kingdom","Germany","France","Italy","Spain","Netherlands","Australia","Japan","China","India","Brazil","Mexico","Russia","South Korea","Sweden","Norway","Denmark","Finland"][toInteger(rand() * 20)]`;
+          case 'faker.address.streetAddress':
+            if (faker) {
+              const addresses = Array.from({length: 10}, () => faker.address.streetAddress());
+              return `["${addresses.join('","')}"] [toInteger(rand() * 10)]`;
+            }
+            return `"${toInteger(rand() * 9999) + 1} " + ["Main St","Oak Ave","Pine Rd","Elm St","Maple Dr","Cedar Ln","Birch Blvd","Spruce Way","Willow Ct","Ash Pl"][toInteger(rand() * 10)]`;
+          case 'faker.internet.email':
+            if (faker) {
+              const emails = Array.from({length: 10}, () => faker.internet.email());
+              return `["${emails.join('","')}"] [toInteger(rand() * 10)]`;
+            }
+            return `["john","jane","mike","sarah","david","lisa","bob","maria","jim","anna"][toInteger(rand() * 10)] + "." + ["smith","johnson","williams","brown","jones"][toInteger(rand() * 5)] + "@" + ["gmail.com","yahoo.com","hotmail.com","outlook.com","example.com"][toInteger(rand() * 5)]`;
+          case 'faker.internet.url':
+            if (faker) {
+              const urls = Array.from({length: 10}, () => faker.internet.url());
+              return `["${urls.join('","')}"] [toInteger(rand() * 10)]`;
+            }
+            return `"https://" + ["google","facebook","twitter","amazon","microsoft","apple","netflix","spotify","github","stackoverflow"][toInteger(rand() * 10)] + ".com"`;
+          case 'faker.internet.ip':
+            if (faker) {
+              const ips = Array.from({length: 10}, () => faker.internet.ip());
+              return `["${ips.join('","')}"] [toInteger(rand() * 10)]`;
+            }
+            return `"192.168." + toString(toInteger(rand() * 255)) + "." + toString(toInteger(rand() * 255))`;
+          case 'faker.company.name':
+            if (faker) {
+              const names = Array.from({length: 10}, () => faker.company.companyName());
+              return `["${names.join('","')}"] [toInteger(rand() * 10)]`;
+            }
+            return `["Acme Corp","Tech Solutions","Global Industries","Innovative Systems","Digital Dynamics","Future Enterprises","Smart Technologies","Advanced Analytics","Cloud Services","Data Insights"][toInteger(rand() * 10)]`;
+          case 'faker.company.catchPhrase':
+            if (faker) {
+              const phrases = Array.from({length: 10}, () => faker.company.catchPhrase());
+              return `["${phrases.join('","')}"] [toInteger(rand() * 10)]`;
+            }
+            return `["Revolutionizing","Transforming","Empowering","Accelerating","Optimizing","Streamlining","Enhancing","Maximizing","Leveraging","Driving"][toInteger(rand() * 10)] + " " + ["business","technology","innovation","solutions","services","platforms","systems","experiences","processes","growth"][toInteger(rand() * 10)]`;
+          case 'faker.lorem.words':
+            if (faker) {
+              const words = Array.from({length: 10}, () => faker.lorem.words(2));
+              return `["${words.join('","')}"] [toInteger(rand() * 10)]`;
+            }
+            return `["lorem","ipsum","dolor","sit","amet","consectetur","adipiscing","elit","sed","do"][toInteger(rand() * 10)] + " " + ["eiusmod","tempor","incididunt","ut","labore","et","dolore","magna","aliqua","ut"][toInteger(rand() * 10)]`;
+          case 'faker.phone.number':
+            if (faker) {
+              const phones = Array.from({length: 10}, () => faker.phone.phoneNumber());
+              return `["${phones.join('","')}"] [toInteger(rand() * 10)]`;
+            }
+            return `"(" + toString(200 + toInteger(rand() * 800)) + ") " + toString(200 + toInteger(rand() * 800)) + "-" + toString(1000 + toInteger(rand() * 9000))`;
+          case 'faker.finance.accountNumber':
+            if (faker) {
+              const accounts = Array.from({length: 10}, () => faker.finance.account());
+              return `["${accounts.join('","')}"] [toInteger(rand() * 10)]`;
+            }
+            return `toString(100000000 + toInteger(rand() * 900000000))`;
+          case 'faker.date.past':
+            return `datetime() - duration({days: toInteger(rand() * 365 * 10)})`;
+          case 'faker.date.future':
+            return `datetime() + duration({days: toInteger(rand() * 365 * 10)})`;
+          case 'faker.date.recent':
+            return `datetime() - duration({hours: toInteger(rand() * 24 * 7)})`;
           case 'always TRUE':
             return 'true';
           case 'always FALSE':
@@ -1078,7 +1183,7 @@
           }
           
           const createStmt = `CREATE (n:${label}${propStr})`;
-          const batched = `CALL {\n\tUNWIND range(1, ${count}) AS i\n\t${createStmt}\n} IN CONCURRENT TRANSACTIONS OF 1000 ROWS`;
+          const batched = `UNWIND range(1, ${count}) AS i\nCALL {\n\t\t${createStmt}\n} IN CONCURRENT TRANSACTIONS OF 1000 ROWS`;
           statements.push(batched);
         }
       }
@@ -1100,7 +1205,7 @@
           }
           
           const matchStmt = `MATCH (s:${sourceLabel}), (t:${targetLabel})\n\tWITH s, t ORDER BY rand() LIMIT 1\n\tCREATE (s)-[r:${type}${propStr}]->(t)`;
-          const batched = `CALL {\n\tUNWIND range(1, ${count}) AS i\n\t${matchStmt}\n} IN TRANSACTIONS OF 1000 ROWS`;
+          const batched = `UNWIND range(1, ${count}) AS i\nCALL {\n\t${matchStmt}\n} IN TRANSACTIONS OF 1000 ROWS`;
           statements.push(batched);
         }
       }
@@ -1345,6 +1450,25 @@
       throw lastErr || new Error('sql.js did not load.');
     }
 
+    async function ensureFaker() {
+      if (window.faker) return window.faker;
+      const candidates = [
+        'https://cdn.jsdelivr.net/npm/faker@5.5.3/dist/faker.min.js',
+        'https://cdnjs.cloudflare.com/ajax/libs/Faker/3.1.0/faker.min.js',
+        'https://unpkg.com/faker@5.5.3/dist/faker.min.js'
+      ];
+      let lastErr = null;
+      for (const url of candidates) {
+        try {
+          await loadScript(url);
+          if (window.faker) return window.faker;
+        } catch (e) {
+          lastErr = e;
+        }
+      }
+      throw lastErr || new Error('Faker did not load.');
+    }
+
     async function initSqlJsOnce() {
       if (window.__sqljs) return window.__sqljs;
       const init = await ensureSqlJs();
@@ -1361,6 +1485,8 @@
       results.push('JSZip: ok');
       await ensureSqlJs();
       results.push('sql.js: ok');
+      await ensureFaker();
+      results.push('Faker: ok');
       if (elDiag) elDiag.textContent = results.join(' · ');
     }
 
@@ -1506,11 +1632,11 @@
       e.target.value = '';
     });
 
-    elExport.addEventListener('click', () => {
+    elExport.addEventListener('click', async () => {
       if (!currentZipName || !currentRows.length) return;
       
       const modelConfig = collectModelConfig();
-      const syntheticCypher = modelConfig ? generateSyntheticDataCypher(modelConfig) : '';
+      const syntheticCypher = modelConfig ? await generateSyntheticDataCypher(modelConfig) : '';
       
       const { csv } = buildExportCsv(currentZipName, currentRows, {
         customer: currentCustomer,

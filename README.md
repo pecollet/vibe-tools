@@ -42,6 +42,14 @@ Common shortcuts to help go through the steps requied to perform an Aura Health 
 Get the list of most costly queries from a Health Check report into Neo4j Browser's (or Aura Console Query's) Saved Cypher section.
 Drop the report zip file, click the Export button and import the generated CSV file into your Saved Cypher with <img width="220" height="20" alt="image" src="https://github.com/user-attachments/assets/e9c0c9ad-e7e8-463c-9771-52f46526b362" />
 
+**New Feature**: Generate synthetic Cypher queries with realistic fake data using Faker.js library. Configure node/relationship properties with templates including:
+- Realistic names, addresses, emails, phone numbers
+- Company names and catchphrases  
+- Internet URLs and IP addresses
+- Financial account numbers
+- Lorem ipsum text
+- Geographic coordinates and datetime ranges
+
 <img width="994" height="799" alt="image" src="https://github.com/user-attachments/assets/f01d59c3-868e-4520-85ba-94ebebc04347" />
 <img width="1294" height="484" alt="image" src="https://github.com/user-attachments/assets/2e5fb8f9-8c6c-4e69-9a35-55e9d335f5d2" />
 
