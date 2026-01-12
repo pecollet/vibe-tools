@@ -176,6 +176,7 @@
       border-radius: 14px;
       border: 1px solid var(--border);
       background: rgba(0,0,0,0.12);
+      max-height: 400px;
     }
 
     table {
@@ -316,6 +317,60 @@
     .tree-children {
       padding-left: 18px;
     }
+
+    .model-form {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .model-section {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px;
+      background: rgba(0,0,0,0.05);
+    }
+
+    .model-item {
+      margin-bottom: 8px;
+    }
+
+    .model-item label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 600;
+    }
+
+    .model-item input[type="range"] {
+      flex: 1;
+      max-width: 200px;
+    }
+
+    .model-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 8px;
+    }
+
+    .model-table th, .model-table td {
+      border: 1px solid var(--border);
+      padding: 6px;
+      text-align: left;
+    }
+
+    .model-table th {
+      background: rgba(0,0,0,0.1);
+      font-weight: 600;
+    }
+
+    .model-table select, .model-table input {
+      width: 100%;
+    }
+
+    .config-cell {
+      min-width: 200px;
+    }
   </style>
 </head>
 <body>
@@ -391,6 +446,13 @@
         </div>
       </div>
     </div>
+
+    <div class="row">
+      <div class="card">
+        <h2>Model Information</h2>
+        <div id="modelInfo">No model data loaded.</div>
+      </div>
+    </div>
   </div>
 
   <script>
@@ -441,6 +503,11 @@
     let currentCustomer = '';
     /** @type {Map<string,string>} */
     let currentAdvertisedByInstance = new Map();
+    /** @type {object|null} */
+    let currentModel = null;
+
+    // ID counter for unique IDs
+    let idCounter = 0;
 
     // ---------------------------
     // Utilities
@@ -540,6 +607,507 @@
       });
     }
 
+    function getTemplateOptions(type) {
+      if (type === 'String') {
+        return ['uuid', 'string from list', 'person name', 'city', 'country', 'IP address'];
+      } else if (type === 'Boolean') {
+        return ['always TRUE', 'always FALSE', 'random'];
+      } else if (type === 'DateTime') {
+        return ['random datetime', 'datetime from list'];
+      } else if (type === 'Point') {
+        return ['random point'];
+      } else {
+        return ['value from list', 'distribution'];
+      }
+    }
+
+    function renderModel(model) {
+      const el = document.getElementById('modelInfo');
+      if (!model) {
+        el.innerHTML = 'No model data available.';
+        return;
+      }
+
+      const neo4jTypes = ['String', 'Integer', 'Float', 'Boolean', 'DateTime', 'Point'];
+      const nodeLabels = Object.keys(model.nodeLabels || {});
+
+      function getConfigHtml(template) {
+        if (template === 'value from list' || template === 'string from list' || template === 'datetime from list') {
+          return '<input type="text" placeholder="comma-separated list">';
+        } else if (template === 'distribution') {
+          return '<label><output>-32768</output> Min: <input type="range" min="-32768" max="32767" value="-32768" class="min-slider"></label> <label><output>32767</output> Max: <input type="range" min="-32768" max="32767" value="32767" class="max-slider"></label> <label>Dist: <select><option>random / uniform</option><option>normal</option><option>power law</option></select></label>';
+        } else if (template === 'random datetime') {
+          return '<label>Min: <input type="date" value="1970-01-01"></label> <label>Max: <input type="date" value="2031-01-01"></label>';
+        } else if (template === 'random point') {
+          return '<label><output>-180</output> X Min: <input type="range" min="-180" max="180" value="-180" class="min-slider"></label> <label><output>180</output> X Max: <input type="range" min="-180" max="180" value="180" class="max-slider"></label> <label><output>-90</output> Y Min: <input type="range" min="-90" max="90" value="-90" class="min-slider"></label> <label><output>90</output> Y Max: <input type="range" min="-90" max="90" value="90" class="max-slider"></label>';
+        }
+        return '';
+      }
+
+      let html = '<form class="model-form">';
+
+      // Node Labels
+      html += '<div class="model-section"><h3>Node Labels</h3>';
+      for (const [label, info] of Object.entries(model.nodeLabels || {})) {
+        html += `<div class="model-item">
+          <label><strong>${escapeHtml(label)}</strong> count: <input type="range" min="0" max="70" value="0" class="count-slider"> <output>0</output></label>
+        </div>`;
+        if (info.properties && info.properties.length) {
+          html += '<table class="model-table"><thead><tr><th>Property name</th><th>Type</th><th>Occurrence %</th><th>Filling template</th><th>Filling config</th></tr></thead><tbody>';
+          for (const prop of info.properties) {
+            const propType = prop.type || 'String';
+            const defaultTemplate = propType === 'String' ? 'uuid' : propType === 'DateTime' ? 'random datetime' : propType === 'Point' ? 'random point' : 'distribution';
+            const templateOptions = getTemplateOptions(propType);
+            const configHtml = getConfigHtml(defaultTemplate);
+            html += `<tr>
+              <td>${escapeHtml(prop.key)}</td>
+              <td><select class="type-select">${neo4jTypes.map(t => `<option value="${t}"${t === propType ? ' selected' : ''}>${t}</option>`).join('')}</select></td>
+              <td><input type="range" min="0" max="100" value="100" class="occ-slider"> <output>100</output>%</td>
+              <td><select class="template-select">${templateOptions.map(o => `<option value="${o}"${o === defaultTemplate ? ' selected' : ''}>${o}</option>`).join('')}</select></td>
+              <td class="config-cell">${configHtml}</td>
+            </tr>`;
+          }
+          html += '</tbody></table>';
+        }
+      }
+      html += '</div>';
+
+      // Relationship Types
+      html += '<div class="model-section"><h3>Relationship Types</h3>';
+      for (const [type, info] of Object.entries(model.relationshipTypes || {})) {
+        html += `<div class="model-item">
+          <label><strong>${escapeHtml(type)}</strong> count: <input type="range" min="0" max="70" value="0" class="count-slider"> <output>0</output></label>
+          <label>Source: <select class="source-select">${nodeLabels.map(l => `<option value="${l}">${l}</option>`).join('')}</select></label>
+          <label>Target: <select class="target-select">${nodeLabels.map(l => `<option value="${l}">${l}</option>`).join('')}</select></label>
+        </div>`;
+        // Properties
+        if (info.properties && info.properties.length) {
+          html += '<table class="model-table"><thead><tr><th>Property name</th><th>Type</th><th>Occurrence %</th><th>Filling template</th><th>Filling config</th></tr></thead><tbody>';
+          for (const prop of info.properties) {
+            const propType = prop.type || 'String';
+            const defaultTemplate = propType === 'String' ? 'uuid' : propType === 'DateTime' ? 'random datetime' : propType === 'Point' ? 'random point' : 'distribution';
+            const templateOptions = getTemplateOptions(propType);
+            const configHtml = getConfigHtml(defaultTemplate);
+            html += `<tr>
+              <td>${escapeHtml(prop.key)}</td>
+              <td><select class="type-select">${neo4jTypes.map(t => `<option value="${t}"${t === propType ? ' selected' : ''}>${t}</option>`).join('')}</select></td>
+              <td><input type="range" min="0" max="100" value="100" class="occ-slider"> <output>100</output>%</td>
+              <td><select class="template-select">${templateOptions.map(o => `<option value="${o}"${o === defaultTemplate ? ' selected' : ''}>${o}</option>`).join('')}</select></td>
+              <td class="config-cell">${configHtml}</td>
+            </tr>`;
+          }
+          html += '</tbody></table>';
+        }
+        // Source labels
+        if (info.sourceNodeLabels && info.sourceNodeLabels.length) {
+          html += '<div class="model-sub"><strong>Source Node Labels:</strong><ul>';
+          for (const lbl of info.sourceNodeLabels) {
+            html += `<li>${escapeHtml(lbl)}</li>`;
+          }
+          html += '</ul></div>';
+        }
+        // Target labels
+        if (info.targetNodeLabels && info.targetNodeLabels.length) {
+          html += '<div class="model-sub"><strong>Target Node Labels:</strong><ul>';
+          for (const lbl of info.targetNodeLabels) {
+            html += `<li>${escapeHtml(lbl)}</li>`;
+          }
+          html += '</ul></div>';
+        }
+        // Undirected labels
+        if (info.undirectedNodeLabels && info.undirectedNodeLabels.length) {
+          html += '<div class="model-sub"><strong>Undirected Node Labels:</strong><ul>';
+          for (const lbl of info.undirectedNodeLabels) {
+            html += `<li>${escapeHtml(lbl)}</li>`;
+          }
+          html += '</ul></div>';
+        }
+      }
+      html += '</div>';
+
+      html += '</form>';
+      el.innerHTML = html;
+      setupModelForm();
+    }
+
+    function setupModelForm() {
+      function computeCount(sliderValue) {
+        if (sliderValue === 0) return 0;
+        return Math.round(Math.pow(10, sliderValue / 10));
+      }
+
+      // Update outputs for sliders
+      document.querySelectorAll('.count-slider').forEach(inp => {
+        const out = inp.nextElementSibling;
+        if (out && out.tagName === 'OUTPUT') {
+          out.textContent = computeCount(parseInt(inp.value));
+          inp.addEventListener('input', () => out.textContent = computeCount(parseInt(inp.value)));
+        }
+      });
+
+      document.querySelectorAll('.occ-slider').forEach(inp => {
+        const out = inp.nextElementSibling;
+        if (out && out.tagName === 'OUTPUT') {
+          out.textContent = inp.value;
+          inp.addEventListener('input', () => out.textContent = inp.value);
+        }
+      });
+
+      document.querySelectorAll('.min-slider, .max-slider').forEach(inp => {
+        const out = inp.previousElementSibling;
+        if (out && out.tagName === 'OUTPUT') {
+          out.textContent = inp.value;
+          inp.addEventListener('input', () => out.textContent = inp.value);
+        }
+      });
+
+      // Enforce min <= max for each pair
+      document.querySelectorAll('.config-cell').forEach(cell => {
+        const sliders = cell.querySelectorAll('.min-slider, .max-slider');
+        for (let i = 0; i < sliders.length; i += 2) {
+          const minSlider = sliders[i];
+          const maxSlider = sliders[i + 1];
+          if (minSlider && maxSlider) {
+            const enforce = () => {
+              const minVal = parseInt(minSlider.value);
+              const maxVal = parseInt(maxSlider.value);
+              if (minVal > maxVal) {
+                maxSlider.value = minVal;
+                maxSlider.previousElementSibling.textContent = minVal;
+              }
+            };
+            minSlider.addEventListener('input', enforce);
+            maxSlider.addEventListener('input', enforce);
+          }
+        }
+      });
+
+      // Handle type select changes
+      document.querySelectorAll('.type-select').forEach(sel => {
+        sel.addEventListener('change', (e) => {
+          const row = e.target.closest('tr');
+          const templateSel = row.querySelector('.template-select');
+          const type = e.target.value;
+          const options = getTemplateOptions(type);
+          templateSel.innerHTML = options.map(o => `<option value="${o}">${o}</option>`).join('');
+          templateSel.dispatchEvent(new Event('change'));
+        });
+      });
+
+      // Handle template select changes
+      document.querySelectorAll('.template-select').forEach(sel => {
+        sel.addEventListener('change', (e) => {
+          const row = e.target.closest('tr');
+          const configCell = row.querySelector('.config-cell');
+          const template = e.target.value;
+          let html = '';
+          if (template === 'value from list' || template === 'string from list' || template === 'datetime from list') {
+            html = '<input type="text" placeholder="comma-separated list">';
+          } else if (template === 'distribution') {
+            html = '<label><output>-32768</output> Min: <input type="range" min="-32768" max="32767" value="-32768" class="min-slider"></label> <label><output>32767</output> Max: <input type="range" min="-32768" max="32767" value="32767" class="max-slider"></label> <label>Dist: <select><option>random / uniform</option><option>normal</option><option>power law</option></select></label>';
+          } else if (template === 'random datetime') {
+            html = '<label>Min: <input type="date" value="1970-01-01"></label> <label>Max: <input type="date" value="2031-01-01"></label>';
+          } else if (template === 'random point') {
+            html = '<label><output>-180</output> X Min: <input type="range" min="-180" max="180" value="-180" class="min-slider"></label> <label><output>180</output> X Max: <input type="range" min="-180" max="180" value="180" class="max-slider"></label> <label><output>-90</output> Y Min: <input type="range" min="-90" max="90" value="-90" class="min-slider"></label> <label><output>90</output> Y Max: <input type="range" min="-90" max="90" value="90" class="max-slider"></label>';
+          }
+          configCell.innerHTML = html;
+          // Setup new sliders
+          const sliders = configCell.querySelectorAll('.min-slider, .max-slider');
+          for (let i = 0; i < sliders.length; i += 2) {
+            const minS = sliders[i];
+            const maxS = sliders[i + 1];
+            if (minS) {
+              const out = minS.previousElementSibling;
+              if (out && out.tagName === 'OUTPUT') {
+                out.textContent = minS.value;
+                minS.addEventListener('input', () => out.textContent = minS.value);
+              }
+            }
+            if (maxS) {
+              const out = maxS.previousElementSibling;
+              if (out && out.tagName === 'OUTPUT') {
+                out.textContent = maxS.value;
+                maxS.addEventListener('input', () => out.textContent = maxS.value);
+              }
+            }
+            if (minS && maxS) {
+              const enforce = () => {
+                const minVal = parseInt(minS.value);
+                const maxVal = parseInt(maxS.value);
+                if (minVal > maxVal) {
+                  maxS.value = minVal;
+                  maxS.nextElementSibling.textContent = minVal;
+                }
+              };
+              minS.addEventListener('input', enforce);
+              maxS.addEventListener('input', enforce);
+            }
+          }
+        });
+      });
+    }
+
+    function collectModelConfig() {
+      if (!currentModel) return null;
+      
+      const config = {
+        nodeLabels: {},
+        relationshipTypes: {}
+      };
+      
+      // Collect node label configs
+      document.querySelectorAll('.model-section h3').forEach(h3 => {
+        if (h3.textContent === 'Node Labels') {
+          const section = h3.parentElement;
+          section.querySelectorAll('.model-item').forEach(item => {
+            const label = item.querySelector('strong').textContent.trim();
+            const countSlider = item.querySelector('.count-slider');
+            const count = countSlider ? parseInt(countSlider.value) : 0;
+            if (count > 0) {
+              const properties = [];
+              const table = item.querySelector('.model-table');
+              if (table) {
+                table.querySelectorAll('tbody tr').forEach(row => {
+                  const cells = row.querySelectorAll('td');
+                  if (cells.length >= 5) {
+                    const propName = cells[0].textContent.trim();
+                    const typeSelect = cells[1].querySelector('.type-select');
+                    const occSlider = cells[2].querySelector('.occ-slider');
+                    const templateSelect = cells[3].querySelector('.template-select');
+                    const configCell = cells[4];
+                    
+                    const propConfig = {
+                      key: propName,
+                      type: typeSelect ? typeSelect.value : 'String',
+                      occurrence: occSlider ? parseInt(occSlider.value) : 100,
+                      template: templateSelect ? templateSelect.value : 'uuid',
+                      config: {}
+                    };
+                    
+                    // Collect config values based on template
+                    if (propConfig.template === 'value from list' || propConfig.template === 'string from list' || propConfig.template === 'datetime from list') {
+                      const input = configCell.querySelector('input[type="text"]');
+                      propConfig.config.list = input ? input.value.split(',').map(s => s.trim()) : [];
+                    } else if (propConfig.template === 'distribution') {
+                      const minSlider = configCell.querySelector('.min-slider');
+                      const maxSlider = configCell.querySelector('.max-slider');
+                      const distSelect = configCell.querySelector('select');
+                      propConfig.config.min = minSlider ? parseInt(minSlider.value) : -32768;
+                      propConfig.config.max = maxSlider ? parseInt(maxSlider.value) : 32767;
+                      propConfig.config.distribution = distSelect ? distSelect.value : 'random / uniform';
+                    } else if (propConfig.template === 'random datetime') {
+                      const minInput = configCell.querySelector('input[type="date"]:first-of-type');
+                      const maxInput = configCell.querySelector('input[type="date"]:last-of-type');
+                      propConfig.config.minDate = minInput ? minInput.value : '1970-01-01';
+                      propConfig.config.maxDate = maxInput ? maxInput.value : '2031-01-01';
+                    } else if (propConfig.template === 'random point') {
+                      const sliders = configCell.querySelectorAll('.min-slider, .max-slider');
+                      propConfig.config.xMin = sliders[0] ? parseInt(sliders[0].value) : -180;
+                      propConfig.config.xMax = sliders[1] ? parseInt(sliders[1].value) : 180;
+                      propConfig.config.yMin = sliders[2] ? parseInt(sliders[2].value) : -90;
+                      propConfig.config.yMax = sliders[3] ? parseInt(sliders[3].value) : 90;
+                    }
+                    
+                    properties.push(propConfig);
+                  }
+                });
+              }
+              
+              config.nodeLabels[label] = { 
+                count: Math.round(Math.pow(10, count / 10)),
+                properties: properties
+              };
+            }
+          });
+        } else if (h3.textContent === 'Relationship Types') {
+          const section = h3.parentElement;
+          section.querySelectorAll('.model-item').forEach(item => {
+            const type = item.querySelector('strong').textContent.trim();
+            const countSlider = item.querySelector('.count-slider');
+            const count = countSlider ? parseInt(countSlider.value) : 0;
+            const sourceSelect = item.querySelector('.source-select');
+            const targetSelect = item.querySelector('.target-select');
+            const source = sourceSelect ? sourceSelect.value : '';
+            const target = targetSelect ? targetSelect.value : '';
+            if (count > 0 && source && target) {
+              const properties = [];
+              const table = item.querySelector('.model-table');
+              if (table) {
+                table.querySelectorAll('tbody tr').forEach(row => {
+                  const cells = row.querySelectorAll('td');
+                  if (cells.length >= 5) {
+                    const propName = cells[0].textContent.trim();
+                    const typeSelect = cells[1].querySelector('.type-select');
+                    const occSlider = cells[2].querySelector('.occ-slider');
+                    const templateSelect = cells[3].querySelector('.template-select');
+                    const configCell = cells[4];
+                    
+                    const propConfig = {
+                      key: propName,
+                      type: typeSelect ? typeSelect.value : 'String',
+                      occurrence: occSlider ? parseInt(occSlider.value) : 100,
+                      template: templateSelect ? templateSelect.value : 'uuid',
+                      config: {}
+                    };
+                    
+                    // Collect config values based on template
+                    if (propConfig.template === 'value from list' || propConfig.template === 'string from list' || propConfig.template === 'datetime from list') {
+                      const input = configCell.querySelector('input[type="text"]');
+                      propConfig.config.list = input ? input.value.split(',').map(s => s.trim()) : [];
+                    } else if (propConfig.template === 'distribution') {
+                      const minSlider = configCell.querySelector('.min-slider');
+                      const maxSlider = configCell.querySelector('.max-slider');
+                      const distSelect = configCell.querySelector('select');
+                      propConfig.config.min = minSlider ? parseInt(minSlider.value) : -32768;
+                      propConfig.config.max = maxSlider ? parseInt(maxSlider.value) : 32767;
+                      propConfig.config.distribution = distSelect ? distSelect.value : 'random / uniform';
+                    } else if (propConfig.template === 'random datetime') {
+                      const minInput = configCell.querySelector('input[type="date"]:first-of-type');
+                      const maxInput = configCell.querySelector('input[type="date"]:last-of-type');
+                      propConfig.config.minDate = minInput ? minInput.value : '1970-01-01';
+                      propConfig.config.maxDate = maxInput ? maxInput.value : '2031-01-01';
+                    } else if (propConfig.template === 'random point') {
+                      const sliders = configCell.querySelectorAll('.min-slider, .max-slider');
+                      propConfig.config.xMin = sliders[0] ? parseInt(sliders[0].value) : -180;
+                      propConfig.config.xMax = sliders[1] ? parseInt(sliders[1].value) : 180;
+                      propConfig.config.yMin = sliders[2] ? parseInt(sliders[2].value) : -90;
+                      propConfig.config.yMax = sliders[3] ? parseInt(sliders[3].value) : 90;
+                    }
+                    
+                    properties.push(propConfig);
+                  }
+                });
+              }
+              
+              config.relationshipTypes[type] = {
+                count: Math.round(Math.pow(10, count / 10)),
+                source: source,
+                target: target,
+                properties: properties
+              };
+            }
+          });
+        }
+      });
+      
+      return config;
+    }
+
+    function generateSyntheticDataCypher(config) {
+      if (!config) return '';
+      
+      const statements = [];
+      
+      function generateValueExpression(propConfig) {
+        const { type, template, config: propCfg } = propConfig;
+        
+        switch (template) {
+          case 'uuid':
+            return 'randomUUID()';
+          case 'person name':
+            return '"Person_" + toString(toInteger(rand() * 10000))';
+          case 'city':
+            return '"City_" + toString(toInteger(rand() * 1000))';
+          case 'country':
+            return '"Country_" + toString(toInteger(rand() * 200))';
+          case 'IP address':
+            return '"192.168." + toString(toInteger(rand() * 255)) + "." + toString(toInteger(rand() * 255))';
+          case 'string from list':
+            const list = propCfg.list || ['value1', 'value2', 'value3'];
+            return `["${list.join('","')}"] [toInteger(rand() * ${list.length})]`;
+          case 'always TRUE':
+            return 'true';
+          case 'always FALSE':
+            return 'false';
+          case 'random':
+            return 'rand() > 0.5';
+          case 'random datetime':
+            const minDate = propCfg.minDate || '1970-01-01';
+            const maxDate = propCfg.maxDate || '2031-01-01';
+            return `datetime("${minDate}T00:00:00Z") + duration({days: toInteger(rand() * 365 * 50)})`;
+          case 'datetime from list':
+            const dtList = propCfg.list || ['2020-01-01T00:00:00Z', '2021-01-01T00:00:00Z'];
+            return `datetime(["${dtList.join('","')}"] [toInteger(rand() * ${dtList.length})])`;
+          case 'random point':
+            const xMin = propCfg.xMin || -180;
+            const xMax = propCfg.xMax || 180;
+            const yMin = propCfg.yMin || -90;
+            const yMax = propCfg.yMax || 90;
+            return `point({longitude: ${xMin} + rand() * (${xMax} - ${xMin}), latitude: ${yMin} + rand() * (${yMax} - ${yMin})})`;
+          case 'value from list':
+            const valList = propCfg.list || [1, 2, 3];
+            return `[${valList.join(',')}] [toInteger(rand() * ${valList.length})]`;
+          case 'distribution':
+            const min = propCfg.min || -32768;
+            const max = propCfg.max || 32767;
+            const dist = propCfg.distribution || 'random / uniform';
+            if (dist === 'normal') {
+              // Simple approximation of normal distribution
+              return `toInteger(${min} + (${max} - ${min}) * (rand() + rand() + rand() + rand() + rand() + rand() - 3) / 3)`;
+            } else if (dist === 'power law') {
+              // Simple power law approximation
+              return `toInteger(${min} + (${max} - ${min}) * pow(rand(), 2))`;
+            } else {
+              return `toInteger(${min} + rand() * (${max} - ${min}))`;
+            }
+          default:
+            // Fallback based on type
+            switch (type) {
+              case 'Integer': return `toInteger(${propCfg.min || -32768} + rand() * (${propCfg.max || 32767} - ${propCfg.min || -32768}))`;
+              case 'Float': return `${propCfg.min || -32768} + rand() * (${propCfg.max || 32767} - ${propCfg.min || -32768})`;
+              case 'Boolean': return 'rand() > 0.5';
+              case 'DateTime': return 'datetime()';
+              case 'Point': return 'point({longitude: rand() * 360 - 180, latitude: rand() * 180 - 90})';
+              default: return `"${template}_value"`;
+            }
+        }
+      }
+      
+      // Generate node creation statements
+      for (const [label, info] of Object.entries(config.nodeLabels)) {
+        const count = info.count;
+        if (count > 0) {
+          const props = info.properties || [];
+          let propStr = '';
+          if (props.length > 0) {
+            const propAssignments = props.map(p => {
+              const value = generateValueExpression(p);
+              return `${p.key}: ${value}`;
+            });
+            propStr = ` {\n\t\t${propAssignments.join(',\n\t\t')}\n\t}`;
+          }
+          
+          const createStmt = `CREATE (n:${label}${propStr})`;
+          const batched = `CALL {\n\tUNWIND range(1, ${count}) AS i\n\t${createStmt}\n} IN CONCURRENT TRANSACTIONS OF 1000 ROWS`;
+          statements.push(batched);
+        }
+      }
+      
+      // Generate relationship creation statements
+      for (const [type, info] of Object.entries(config.relationshipTypes)) {
+        const count = info.count;
+        const sourceLabel = info.source;
+        const targetLabel = info.target;
+        if (count > 0 && sourceLabel && targetLabel) {
+          const props = info.properties || [];
+          let propStr = '';
+          if (props.length > 0) {
+            const propAssignments = props.map(p => {
+              const value = generateValueExpression(p);
+              return `${p.key}: ${value}`;
+            });
+            propStr = ` {\n\t\t${propAssignments.join(',\n\t\t')}\n\t}`;
+          }
+          
+          const matchStmt = `MATCH (s:${sourceLabel}), (t:${targetLabel})\n\tWITH s, t ORDER BY rand() LIMIT 1\n\tCREATE (s)-[r:${type}${propStr}]->(t)`;
+          const batched = `CALL {\n\tUNWIND range(1, ${count}) AS i\n\t${matchStmt}\n} IN TRANSACTIONS OF 1000 ROWS`;
+          statements.push(batched);
+        }
+      }
+      
+      return statements.join(';\n\n');
+    }
+
     function toSafeString(x) {
       if (x === null || x === undefined) return '';
       return String(x);
@@ -573,7 +1141,11 @@
 
     function makeId() {
       if (window.crypto?.randomUUID) return crypto.randomUUID();
-      return `id_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+      // Fallback: generate a UUID-like string that's highly unlikely to collide
+      const timestamp = Date.now().toString(36);
+      const random1 = Math.random().toString(36).substring(2);
+      const random2 = Math.random().toString(36).substring(2);
+      return `${timestamp}-${random1}-${random2}`;
     }
 
     function csvEscape(value) {
@@ -591,6 +1163,7 @@
       const customer = (opts?.customer ?? '').trim();
       /** @type {Map<string,string>} */
       const advertisedByInstance = opts?.advertisedByInstance instanceof Map ? opts.advertisedByInstance : new Map();
+      const syntheticCypher = opts?.syntheticCypher ?? '';
 
       const instances = Array.from(
         new Set(rows.map(r => (r.instance ?? '').trim()).filter(Boolean))
@@ -611,6 +1184,12 @@
       // Root line: description from global_vars customer
       root_name = `${customer} - ${zipName || 'zip'}`;
       lines.push([root_name, customer, '', rootId, '', 'true']);
+
+      // Synthetic Data folder and query (under root)
+      if (syntheticCypher) {
+        const syntheticFolderId = makeId();
+        lines.push(['Synthetic Data Creation', '', syntheticCypher, makeId(), rootId, 'false']);
+      }
 
       // Instance folder lines
       for (const inst of instances) {
@@ -796,6 +1375,7 @@
         currentZipName = file.name;
         currentCustomer = '';
         currentAdvertisedByInstance = new Map();
+        currentModel = null;
 
         elFileMeta.textContent = `Loaded: ${file.name} (${(file.size/1024/1024).toFixed(2)} MB)`;
 
@@ -888,9 +1468,24 @@
           console.warn('Metadata enrichment failed:', e);
         }
 
+        // Query model_json
+        try {
+          const modelRes = db.exec("SELECT value FROM global_vars WHERE key='model_json' LIMIT 1");
+          if (modelRes?.length && modelRes[0].values?.length) {
+            const jsonStr = toSafeString(modelRes[0].values[0][0]);
+            currentModel = JSON.parse(jsonStr);
+          } else {
+            currentModel = null;
+          }
+        } catch (e) {
+          console.warn('Model JSON query failed:', e);
+          currentModel = null;
+        }
+
         db.close();
 
         setRows(rows);
+        renderModel(currentModel);
 
         setStatus('Loaded hc.db and queried most_costly_queries.', 'good');
       } catch (err) {
@@ -913,9 +1508,14 @@
 
     elExport.addEventListener('click', () => {
       if (!currentZipName || !currentRows.length) return;
+      
+      const modelConfig = collectModelConfig();
+      const syntheticCypher = modelConfig ? generateSyntheticDataCypher(modelConfig) : '';
+      
       const { csv } = buildExportCsv(currentZipName, currentRows, {
         customer: currentCustomer,
-        advertisedByInstance: currentAdvertisedByInstance
+        advertisedByInstance: currentAdvertisedByInstance,
+        syntheticCypher: syntheticCypher
       });
 
       const outName = `${currentZipName.replace(/\.zip$/i,'') || 'export'}.csv`;

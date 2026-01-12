@@ -62,10 +62,9 @@ This repository contains standalone HTML-based data visualization and utility to
 ## Common Libraries
 - **Plotly.js**: Interactive charts and graphs
 - **PapaParse**: CSV parsing and processing
-- **No frameworks**: Vanilla JS/CSS for maximum portability
+- **No frameworks**: Vanilla JS/CSS for maximum portability. Absolutely no React.
 
 ## Examples
 - For new tools: Copy structure from `plot_csv_metrics.html` and modify data processing logic
 - File upload: See `dropZone` event handlers in any tool
-- Plotting: Use `Plotly.newPlot()` with data arrays and layout objects</content>
-<parameter name="filePath">/Users/david.pecollet/projects/vibe-tools/.github/copilot-instructions.md
+- Plotting: Use `Plotly.newPlot()` with data arrays and layout objects
