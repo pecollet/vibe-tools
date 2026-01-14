@@ -406,6 +406,49 @@
       max-width: 200px;
     }
 
+    .section-header {
+      display: grid;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 8px;
+      padding: 4px 0;
+      border-bottom: 1px solid var(--border);
+      align-items: center;
+    }
+
+    .section-header:has(.hdr-type) {
+      grid-template-columns: 1fr 2fr 1fr 1fr auto;
+      gap: 12px;
+    }
+
+    .section-header:has(.hdr-label) {
+      grid-template-columns: 1fr 2fr auto;
+      gap: 12px;
+    }
+
+    .toggle-props-btn {
+      background: rgba(255,255,255,0.1);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 2px 6px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+      min-width: 24px;
+      transition: background 0.2s;
+    }
+
+    .toggle-props-btn:hover {
+      background: rgba(255,255,255,0.15);
+    }
+
+    .toggle-props-btn.collapsed {
+      background: rgba(255,255,255,0.05);
+    }
+
     .model-table {
       width: 100%;
       border-collapse: collapse;
@@ -863,6 +906,7 @@
 
       // Node Labels
       html += '<div class="model-section"><h3>Node Labels</h3>';
+      html += '<div class="section-header"><div class="hdr-label">LABEL</div><div class="hdr-count">COUNT</div><button type="button" class="toggle-props-btn" title="Toggle all properties">▼</button></div>';
       for (const [label, info] of Object.entries(model.nodeLabels || {}).sort(([a], [b]) => a.localeCompare(b))) {
         html += `<div class="model-item">
           <div class="node-row">
@@ -894,6 +938,7 @@
 
       // Relationship Types
       html += '<div class="model-section"><h3>Relationship Types</h3>';
+      html += '<div class="section-header"><div class="hdr-type">TYPE</div><div class="hdr-count">COUNT</div><div class="hdr-source">SOURCE</div><div class="hdr-target">TARGET</div><button type="button" class="toggle-props-btn" title="Toggle all properties">▼</button></div>';
       for (const [type, info] of Object.entries(model.relationshipTypes || {}).sort(([a], [b]) => a.localeCompare(b))) {
         const sourceOptions = (info.sourceNodeLabels && info.sourceNodeLabels.length > 0 ? info.sourceNodeLabels : nodeLabels).sort((a, b) => a.localeCompare(b));
         const targetOptions = (info.targetNodeLabels && info.targetNodeLabels.length > 0 ? info.targetNodeLabels : nodeLabels).sort((a, b) => a.localeCompare(b));
@@ -1147,6 +1192,55 @@
             }
           }
         });
+      });
+
+      // Handle toggle properties buttons
+      document.querySelectorAll('.toggle-props-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          const section = e.target.closest('.model-section');
+          const isCollapsed = btn.classList.contains('collapsed');
+          
+          if (isCollapsed) {
+            // Expand all property tables in this section
+            section.querySelectorAll('.model-table').forEach(table => {
+              table.style.display = '';
+            });
+            btn.textContent = '▼';
+            btn.classList.remove('collapsed');
+            btn.title = 'Toggle all properties';
+          } else {
+            // Collapse all property tables in this section
+            section.querySelectorAll('.model-table').forEach(table => {
+              table.style.display = 'none';
+            });
+            btn.textContent = '▶';
+            btn.classList.add('collapsed');
+            btn.title = 'Toggle all properties (collapsed)';
+          }
+          
+          // Save collapsed state
+          const sectionType = section.querySelector('h3').textContent;
+          const collapsedStates = JSON.parse(localStorage.getItem('collapsed-sections') || '{}');
+          collapsedStates[sectionType] = !isCollapsed;
+          localStorage.setItem('collapsed-sections', JSON.stringify(collapsedStates));
+        });
+      });
+
+      // Restore collapsed states
+      const collapsedStates = JSON.parse(localStorage.getItem('collapsed-sections') || '{}');
+      document.querySelectorAll('.model-section').forEach(section => {
+        const sectionType = section.querySelector('h3').textContent;
+        const isCollapsed = collapsedStates[sectionType];
+        const toggleBtn = section.querySelector('.toggle-props-btn');
+        
+        if (isCollapsed && toggleBtn) {
+          section.querySelectorAll('.model-table').forEach(table => {
+            table.style.display = 'none';
+          });
+          toggleBtn.textContent = '▶';
+          toggleBtn.classList.add('collapsed');
+          toggleBtn.title = 'Toggle all properties (collapsed)';
+        }
       });
     }
 
