@@ -332,7 +332,7 @@
     }
 
     .model-item {
-      margin-bottom: 8px;
+      /* margin-bottom: 8px; */
     }
 
     .model-item label {
@@ -343,6 +343,65 @@
     }
 
     .model-item input[type="range"] {
+      flex: 1;
+      max-width: 200px;
+    }
+
+    .rel-row {
+      display: grid;
+      grid-template-columns: 1fr 2fr 1fr 1fr;
+      gap: 12px;
+      align-items: center;
+      padding: 8px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+    }
+
+    .rel-type {
+      font-weight: 600;
+      color: var(--accent);
+    }
+
+    .rel-count {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .rel-count input[type="range"] {
+      flex: 1;
+      max-width: 150px;
+    }
+
+    .rel-source, .rel-target {
+      min-width: 0;
+    }
+
+    .rel-source select, .rel-target select {
+      width: 100%;
+      min-width: 120px;
+    }
+
+    .node-row {
+      display: grid;
+      grid-template-columns: 1fr 2fr;
+      gap: 12px;
+      align-items: center;
+      padding: 8px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+    }
+
+    .node-label {
+      font-weight: 600;
+      color: var(--accent);
+    }
+
+    .node-count {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .node-count input[type="range"] {
       flex: 1;
       max-width: 200px;
     }
@@ -806,7 +865,12 @@
       html += '<div class="model-section"><h3>Node Labels</h3>';
       for (const [label, info] of Object.entries(model.nodeLabels || {}).sort(([a], [b]) => a.localeCompare(b))) {
         html += `<div class="model-item">
-          <label><strong>${escapeHtml(label)}</strong> count: <input type="range" min="0" max="70" value="0" class="count-slider"> <output>0</output></label>
+          <div class="node-row">
+            <div class="node-label"><strong>${escapeHtml(label)}</strong></div>
+            <div class="node-count">
+              <input type="range" min="0" max="70" value="0" class="count-slider"> <output>0</output>
+            </div>
+          </div>
         </div>`;
         if (info.properties && info.properties.length) {
           html += '<table class="model-table"><thead><tr><th>Property name</th><th>Type</th><th>Occurrence %</th><th>Filling template</th><th>Filling config</th></tr></thead><tbody>';
@@ -836,9 +900,20 @@
         const isSourceAll = !(info.sourceNodeLabels && info.sourceNodeLabels.length > 0);
         const isTargetAll = !(info.targetNodeLabels && info.targetNodeLabels.length > 0);
         html += `<div class="model-item">
-          <label><strong>${escapeHtml(type)}</strong> count: <input type="range" min="0" max="70" value="0" class="count-slider"> <output>0</output></label>
-          <label>Source: <select class="source-select">${sourceOptions.map(l => `<option value="${l}"${l === sourceOptions[0] ? ' selected' : ''}${isSourceAll ? ' style="color: grey;"' : ''}>${l}</option>`).join('')}</select></label>
-          <label>Target: <select class="target-select">${targetOptions.map(l => `<option value="${l}"${l === targetOptions[0] ? ' selected' : ''}${isTargetAll ? ' style="color: grey;"' : ''}>${l}</option>`).join('')}</select></label>
+          <div class="rel-row">
+            <div class="rel-type"><strong>${escapeHtml(type)}</strong></div>
+            <div class="rel-count">
+              <input type="range" min="0" max="70" value="0" class="count-slider"> <output>0</output>
+              <button type="button" class="set-to-source-btn" style="font-size: 11px; padding: 2px 6px; margin-left: 8px;">Set to Source</button>
+              <button type="button" class="set-to-target-btn" style="font-size: 11px; padding: 2px 6px; margin-left: 4px;">Set to Target</button>
+            </div>
+            <div class="rel-source">
+              <select class="source-select">${sourceOptions.map(l => `<option value="${l}"${l === sourceOptions[0] ? ' selected' : ''}${isSourceAll ? ' style="color: grey;"' : ''}>${l}</option>`).join('')}</select>
+            </div>
+            <div class="rel-target">
+              <select class="target-select">${targetOptions.map(l => `<option value="${l}"${l === targetOptions[0] ? ' selected' : ''}${isTargetAll ? ' style="color: grey;"' : ''}>${l}</option>`).join('')}</select>
+            </div>
+          </div>
         </div>`;
         // Properties
         if (info.properties && info.properties.length) {
@@ -1008,6 +1083,67 @@
               };
               minS.addEventListener('input', enforce);
               maxS.addEventListener('input', enforce);
+            }
+          }
+        });
+      });
+
+      // Handle set to source/target buttons
+      document.querySelectorAll('.set-to-source-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          const item = e.target.closest('.model-item');
+          const sourceSelect = item.querySelector('.source-select');
+          const countSlider = item.querySelector('.count-slider');
+          if (sourceSelect && countSlider) {
+            const sourceLabel = sourceSelect.value;
+            // Find the node label count slider
+            const nodeSections = document.querySelectorAll('.model-section');
+            for (const section of nodeSections) {
+              if (section.querySelector('h3')?.textContent === 'Node Labels') {
+                const nodeItems = section.querySelectorAll('.model-item');
+                for (const nodeItem of nodeItems) {
+                  const label = nodeItem.querySelector('strong')?.textContent.trim();
+                  if (label === sourceLabel) {
+                    const nodeCountSlider = nodeItem.querySelector('.count-slider');
+                    if (nodeCountSlider) {
+                      countSlider.value = nodeCountSlider.value;
+                      countSlider.dispatchEvent(new Event('input'));
+                      break;
+                    }
+                  }
+                }
+                break;
+              }
+            }
+          }
+        });
+      });
+
+      document.querySelectorAll('.set-to-target-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          const item = e.target.closest('.model-item');
+          const targetSelect = item.querySelector('.target-select');
+          const countSlider = item.querySelector('.count-slider');
+          if (targetSelect && countSlider) {
+            const targetLabel = targetSelect.value;
+            // Find the node label count slider
+            const nodeSections = document.querySelectorAll('.model-section');
+            for (const section of nodeSections) {
+              if (section.querySelector('h3')?.textContent === 'Node Labels') {
+                const nodeItems = section.querySelectorAll('.model-item');
+                for (const nodeItem of nodeItems) {
+                  const label = nodeItem.querySelector('strong')?.textContent.trim();
+                  if (label === targetLabel) {
+                    const nodeCountSlider = nodeItem.querySelector('.count-slider');
+                    if (nodeCountSlider) {
+                      countSlider.value = nodeCountSlider.value;
+                      countSlider.dispatchEvent(new Event('input'));
+                      break;
+                    }
+                  }
+                }
+                break;
+              }
             }
           }
         });
