@@ -510,6 +510,155 @@
     let idCounter = 0;
 
     // ---------------------------
+    // Settings storage
+    // ---------------------------
+    function saveSettings() {
+      if (!currentZipName) return;
+      const settings = {};
+      const form = document.querySelector('.model-form');
+      if (!form) return;
+
+      // Node labels counts
+      form.querySelectorAll('.model-section:first-of-type .count-slider').forEach((slider, i) => {
+        settings[`node-${i}-count`] = slider.value;
+      });
+
+      // Node properties
+      form.querySelectorAll('.model-section:first-of-type table tbody tr').forEach((row, i) => {
+        const typeSel = row.querySelector('.type-select');
+        const occSlider = row.querySelector('.occ-slider');
+        const templateSel = row.querySelector('.template-select');
+        const configCell = row.querySelector('.config-cell');
+        if (typeSel) settings[`node-prop-${i}-type`] = typeSel.value;
+        if (occSlider) settings[`node-prop-${i}-occ`] = occSlider.value;
+        if (templateSel) settings[`node-prop-${i}-template`] = templateSel.value;
+        const inputs = configCell ? configCell.querySelectorAll('input, select') : [];
+        inputs.forEach((inp, j) => {
+          settings[`node-prop-${i}-config-${j}`] = inp.value;
+        });
+      });
+
+      // Relationship counts
+      form.querySelectorAll('.model-section:nth-of-type(2) .count-slider').forEach((slider, i) => {
+        settings[`rel-${i}-count`] = slider.value;
+      });
+
+      // Relationship source/target selects
+      const relSels = form.querySelectorAll('.model-section:nth-of-type(2) .source-select, .model-section:nth-of-type(2) .target-select');
+      relSels.forEach((sel, i) => {
+        settings[`rel-sel-${i}`] = sel.value;
+      });
+
+      // Relationship properties
+      form.querySelectorAll('.model-section:nth-of-type(2) table tbody tr').forEach((row, i) => {
+        const typeSel = row.querySelector('.type-select');
+        const occSlider = row.querySelector('.occ-slider');
+        const templateSel = row.querySelector('.template-select');
+        const configCell = row.querySelector('.config-cell');
+        if (typeSel) settings[`rel-prop-${i}-type`] = typeSel.value;
+        if (occSlider) settings[`rel-prop-${i}-occ`] = occSlider.value;
+        if (templateSel) settings[`rel-prop-${i}-template`] = templateSel.value;
+        const inputs = configCell ? configCell.querySelectorAll('input, select') : [];
+        inputs.forEach((inp, j) => {
+          settings[`rel-prop-${i}-config-${j}`] = inp.value;
+        });
+      });
+
+      localStorage.setItem(`settings-${currentZipName}`, JSON.stringify(settings));
+    }
+
+    function loadSettings() {
+      if (!currentZipName) return;
+      const stored = localStorage.getItem(`settings-${currentZipName}`);
+      if (!stored) return;
+      const settings = JSON.parse(stored);
+      const form = document.querySelector('.model-form');
+      if (!form) return;
+
+      // Apply settings
+      Object.keys(settings).forEach(key => {
+        const value = settings[key];
+        if (key.startsWith('node-') && key.endsWith('-count')) {
+          const i = parseInt(key.split('-')[1]);
+          const slider = form.querySelectorAll('.model-section:first-of-type .count-slider')[i];
+          if (slider) {
+            slider.value = value;
+            slider.dispatchEvent(new Event('input'));
+          }
+        } else if (key.startsWith('node-prop-')) {
+          const parts = key.split('-');
+          const i = parseInt(parts[2]);
+          const row = form.querySelectorAll('.model-section:first-of-type table tbody tr')[i];
+          if (!row) return;
+          if (key.includes('-type')) {
+            const sel = row.querySelector('.type-select');
+            if (sel) {
+              sel.value = value;
+              sel.dispatchEvent(new Event('change'));
+            }
+          } else if (key.includes('-occ')) {
+            const slider = row.querySelector('.occ-slider');
+            if (slider) {
+              slider.value = value;
+              slider.dispatchEvent(new Event('input'));
+            }
+          } else if (key.includes('-template')) {
+            const sel = row.querySelector('.template-select');
+            if (sel) {
+              sel.value = value;
+              sel.dispatchEvent(new Event('change'));
+            }
+          } else if (key.includes('-config-')) {
+            const j = parseInt(parts[4]);
+            const configCell = row.querySelector('.config-cell');
+            const inputs = configCell ? configCell.querySelectorAll('input, select') : [];
+            if (inputs[j]) inputs[j].value = value;
+          }
+        } else if (key.startsWith('rel-') && key.endsWith('-count')) {
+          const i = parseInt(key.split('-')[1]);
+          const slider = form.querySelectorAll('.model-section:nth-of-type(2) .count-slider')[i];
+          if (slider) {
+            slider.value = value;
+            slider.dispatchEvent(new Event('input'));
+          }
+        } else if (key.startsWith('rel-sel-')) {
+          const i = parseInt(key.split('-')[2]);
+          const sels = form.querySelectorAll('.model-section:nth-of-type(2) .source-select, .model-section:nth-of-type(2) .target-select');
+          if (sels[i]) sels[i].value = value;
+        } else if (key.startsWith('rel-prop-')) {
+          const parts = key.split('-');
+          const i = parseInt(parts[2]);
+          const row = form.querySelectorAll('.model-section:nth-of-type(2) table tbody tr')[i];
+          if (!row) return;
+          if (key.includes('-type')) {
+            const sel = row.querySelector('.type-select');
+            if (sel) {
+              sel.value = value;
+              sel.dispatchEvent(new Event('change'));
+            }
+          } else if (key.includes('-occ')) {
+            const slider = row.querySelector('.occ-slider');
+            if (slider) {
+              slider.value = value;
+              slider.dispatchEvent(new Event('input'));
+            }
+          } else if (key.includes('-template')) {
+            const sel = row.querySelector('.template-select');
+            if (sel) {
+              sel.value = value;
+              sel.dispatchEvent(new Event('change'));
+            }
+          } else if (key.includes('-config-')) {
+            const j = parseInt(parts[4]);
+            const configCell = row.querySelector('.config-cell');
+            const inputs = configCell ? configCell.querySelectorAll('input, select') : [];
+            if (inputs[j]) inputs[j].value = value;
+          }
+        }
+      });
+    }
+
+    // ---------------------------
     // Utilities
     // ---------------------------
     function escapeHtml(str) {
@@ -739,6 +888,13 @@
       html += '</form>';
       el.innerHTML = html;
       setupModelForm();
+      loadSettings();
+      // Add save listeners
+      const form = document.querySelector('.model-form');
+      if (form) {
+        form.addEventListener('input', saveSettings);
+        form.addEventListener('change', saveSettings);
+      }
     }
 
     function setupModelForm() {
