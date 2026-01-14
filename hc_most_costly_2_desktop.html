@@ -655,13 +655,13 @@
 
       // Node Labels
       html += '<div class="model-section"><h3>Node Labels</h3>';
-      for (const [label, info] of Object.entries(model.nodeLabels || {})) {
+      for (const [label, info] of Object.entries(model.nodeLabels || {}).sort(([a], [b]) => a.localeCompare(b))) {
         html += `<div class="model-item">
           <label><strong>${escapeHtml(label)}</strong> count: <input type="range" min="0" max="70" value="0" class="count-slider"> <output>0</output></label>
         </div>`;
         if (info.properties && info.properties.length) {
           html += '<table class="model-table"><thead><tr><th>Property name</th><th>Type</th><th>Occurrence %</th><th>Filling template</th><th>Filling config</th></tr></thead><tbody>';
-          for (const prop of info.properties) {
+          for (const prop of info.properties.sort((a, b) => a.key.localeCompare(b.key))) {
             const propType = prop.type || 'String';
             const defaultTemplate = propType === 'String' ? 'uuid' : propType === 'DateTime' ? 'random datetime' : propType === 'Point' ? 'random point' : 'distribution';
             const templateOptions = getTemplateOptions(propType);
@@ -681,7 +681,7 @@
 
       // Relationship Types
       html += '<div class="model-section"><h3>Relationship Types</h3>';
-      for (const [type, info] of Object.entries(model.relationshipTypes || {})) {
+      for (const [type, info] of Object.entries(model.relationshipTypes || {}).sort(([a], [b]) => a.localeCompare(b))) {
         html += `<div class="model-item">
           <label><strong>${escapeHtml(type)}</strong> count: <input type="range" min="0" max="70" value="0" class="count-slider"> <output>0</output></label>
           <label>Source: <select class="source-select">${nodeLabels.map(l => `<option value="${l}">${l}</option>`).join('')}</select></label>
@@ -690,7 +690,7 @@
         // Properties
         if (info.properties && info.properties.length) {
           html += '<table class="model-table"><thead><tr><th>Property name</th><th>Type</th><th>Occurrence %</th><th>Filling template</th><th>Filling config</th></tr></thead><tbody>';
-          for (const prop of info.properties) {
+          for (const prop of info.properties.sort((a, b) => a.key.localeCompare(b.key))) {
             const propType = prop.type || 'String';
             const defaultTemplate = propType === 'String' ? 'uuid' : propType === 'DateTime' ? 'random datetime' : propType === 'Point' ? 'random point' : 'distribution';
             const templateOptions = getTemplateOptions(propType);
