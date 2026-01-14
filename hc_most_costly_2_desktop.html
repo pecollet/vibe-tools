@@ -682,10 +682,14 @@
       // Relationship Types
       html += '<div class="model-section"><h3>Relationship Types</h3>';
       for (const [type, info] of Object.entries(model.relationshipTypes || {}).sort(([a], [b]) => a.localeCompare(b))) {
+        const sourceOptions = (info.sourceNodeLabels && info.sourceNodeLabels.length > 0 ? info.sourceNodeLabels : nodeLabels).sort((a, b) => a.localeCompare(b));
+        const targetOptions = (info.targetNodeLabels && info.targetNodeLabels.length > 0 ? info.targetNodeLabels : nodeLabels).sort((a, b) => a.localeCompare(b));
+        const isSourceAll = !(info.sourceNodeLabels && info.sourceNodeLabels.length > 0);
+        const isTargetAll = !(info.targetNodeLabels && info.targetNodeLabels.length > 0);
         html += `<div class="model-item">
           <label><strong>${escapeHtml(type)}</strong> count: <input type="range" min="0" max="70" value="0" class="count-slider"> <output>0</output></label>
-          <label>Source: <select class="source-select">${nodeLabels.map(l => `<option value="${l}">${l}</option>`).join('')}</select></label>
-          <label>Target: <select class="target-select">${nodeLabels.map(l => `<option value="${l}">${l}</option>`).join('')}</select></label>
+          <label>Source: <select class="source-select">${sourceOptions.map(l => `<option value="${l}"${l === sourceOptions[0] ? ' selected' : ''}${isSourceAll ? ' style="color: grey;"' : ''}>${l}</option>`).join('')}</select></label>
+          <label>Target: <select class="target-select">${targetOptions.map(l => `<option value="${l}"${l === targetOptions[0] ? ' selected' : ''}${isTargetAll ? ' style="color: grey;"' : ''}>${l}</option>`).join('')}</select></label>
         </div>`;
         // Properties
         if (info.properties && info.properties.length) {
@@ -706,7 +710,7 @@
           html += '</tbody></table>';
         }
         // Source labels
-        if (info.sourceNodeLabels && info.sourceNodeLabels.length) {
+        if (info.sourceNodeLabels && info.sourceNodeLabels.length > 1) {
           html += '<div class="model-sub"><strong>Source Node Labels:</strong><ul>';
           for (const lbl of info.sourceNodeLabels) {
             html += `<li>${escapeHtml(lbl)}</li>`;
@@ -714,7 +718,7 @@
           html += '</ul></div>';
         }
         // Target labels
-        if (info.targetNodeLabels && info.targetNodeLabels.length) {
+        if (info.targetNodeLabels && info.targetNodeLabels.length > 1) {
           html += '<div class="model-sub"><strong>Target Node Labels:</strong><ul>';
           for (const lbl of info.targetNodeLabels) {
             html += `<li>${escapeHtml(lbl)}</li>`;
