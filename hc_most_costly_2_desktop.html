@@ -649,10 +649,10 @@
       form.querySelectorAll('.model-section:nth-of-type(2) .model-item').forEach((item, i) => {
         const type = item.querySelector('strong').textContent.trim();
         const countSlider = item.querySelector('.count-slider');
-        const sourceSpan = item.querySelector('.rel-source .fixed-label');
-        const targetSpan = item.querySelector('.rel-target .fixed-label');
-        const source = sourceSpan ? sourceSpan.textContent.trim() : '';
-        const target = targetSpan ? targetSpan.textContent.trim() : '';
+        const sourceEl = item.querySelector('.rel-source .source-select') || item.querySelector('.rel-source .fixed-label');
+        const targetEl = item.querySelector('.rel-target .target-select') || item.querySelector('.rel-target .fixed-label');
+        const source = sourceEl ? (sourceEl.tagName === 'SELECT' ? sourceEl.value : sourceEl.textContent.trim()) : '';
+        const target = targetEl ? (targetEl.tagName === 'SELECT' ? targetEl.value : targetEl.textContent.trim()) : '';
         if (countSlider && source && target) {
           settings[`rel-${type}-${source}-${target}-count`] = countSlider.value;
         }
@@ -735,16 +735,36 @@
             const relItems = form.querySelectorAll('.model-section:nth-of-type(2) .model-item');
             for (const item of relItems) {
               const itemType = item.querySelector('strong')?.textContent.trim();
-              const itemSource = item.querySelector('.rel-source .fixed-label')?.textContent.trim();
-              const itemTarget = item.querySelector('.rel-target .fixed-label')?.textContent.trim();
-              
-              if (itemType === type && itemSource === source && itemTarget === target) {
-                const slider = item.querySelector('.count-slider');
-                if (slider) {
-                  slider.value = value;
-                  slider.dispatchEvent(new Event('input'));
+              if (itemType === type) {
+                const sourceEl = item.querySelector('.rel-source .source-select') || item.querySelector('.rel-source .fixed-label');
+                const targetEl = item.querySelector('.rel-target .target-select') || item.querySelector('.rel-target .fixed-label');
+                const itemSource = sourceEl ? (sourceEl.tagName === 'SELECT' ? sourceEl.value : sourceEl.textContent.trim()) : '';
+                const itemTarget = targetEl ? (targetEl.tagName === 'SELECT' ? targetEl.value : targetEl.textContent.trim()) : '';
+                
+                let matches = false;
+                if (sourceEl.tagName === 'SELECT') {
+                  sourceEl.value = source;
+                  matches = true;
+                } else if (itemSource === source) {
+                  matches = true;
                 }
-                break;
+                if (targetEl.tagName === 'SELECT') {
+                  targetEl.value = target;
+                  matches = true;
+                } else if (itemTarget === target) {
+                  matches = matches && true;
+                } else {
+                  matches = false;
+                }
+                
+                if (matches) {
+                  const slider = item.querySelector('.count-slider');
+                  if (slider) {
+                    slider.value = value;
+                    slider.dispatchEvent(new Event('input'));
+                  }
+                  break;
+                }
               }
             }
           }
@@ -961,11 +981,49 @@
       html += '<div class="model-section"><h3>Relationship Types</h3>';
       html += '<div class="section-header"><div class="hdr-type">TYPE</div><div class="hdr-count">COUNT</div><div class="hdr-source">SOURCE</div><div class="hdr-target">TARGET</div><button type="button" class="toggle-props-btn" title="Toggle all properties">▼</button></div>';
       for (const [type, info] of Object.entries(model.relationshipTypes || {}).sort(([a], [b]) => a.localeCompare(b))) {
-        const sourceLabels = info.sourceNodeLabels && info.sourceNodeLabels.length > 0 ? info.sourceNodeLabels : nodeLabels;
-        const targetLabels = info.targetNodeLabels && info.targetNodeLabels.length > 0 ? info.targetNodeLabels : nodeLabels;
+        const sourceLabels = info.sourceNodeLabels || [];
+        const targetLabels = info.targetNodeLabels || [];
+        const useSourceSelect = sourceLabels.length === 0;
+        const useTargetSelect = targetLabels.length === 0;
         
-        // Create entries for each source-target combination
-        for (const sourceLabel of sourceLabels) {
+        if (useSourceSelect && useTargetSelect) {
+          // One entry with selects for both
+          html += `<div class="model-item">
+            <div class="rel-row">
+              <div class="rel-type"><strong>${escapeHtml(type)}</strong></div>
+              <div class="rel-count">
+                <input type="range" min="0" max="70" value="0" class="count-slider"> <output>0</output>
+                <button type="button" class="set-to-source-btn" style="font-size: 11px; padding: 2px 6px; margin-left: 8px;">Set to Source</button>
+                <button type="button" class="set-to-target-btn" style="font-size: 11px; padding: 2px 6px; margin-left: 4px;">Set to Target</button>
+              </div>
+              <div class="rel-source">
+                <select class="source-select">${nodeLabels.map(l => `<option value="${l}">${l}</option>`).join('')}</select>
+              </div>
+              <div class="rel-target">
+                <select class="target-select">${nodeLabels.map(l => `<option value="${l}">${l}</option>`).join('')}</select>
+              </div>
+            </div>
+          </div>`;
+          // Properties
+          if (info.properties && info.properties.length) {
+            html += '<table class="model-table"><thead><tr><th>Property name</th><th>Type</th><th>Occurrence %</th><th>Filling template</th><th>Filling config</th></tr></thead><tbody>';
+            for (const prop of info.properties.sort((a, b) => a.key.localeCompare(b.key))) {
+              const propType = prop.type || 'String';
+              const defaultTemplate = propType === 'String' ? 'uuid' : propType === 'DateTime' ? 'random datetime' : propType === 'Point' ? 'random point' : 'distribution';
+              const templateOptions = getTemplateOptions(propType);
+              const configHtml = getConfigHtml(defaultTemplate);
+              html += `<tr>
+                <td>${escapeHtml(prop.key)}</td>
+                <td><select class="type-select">${neo4jTypes.map(t => `<option value="${t}"${t === propType ? ' selected' : ''}>${t}</option>`).join('')}</select></td>
+                <td><input type="range" min="0" max="100" value="100" class="occ-slider"> <output>100</output>%</td>
+                <td><select class="template-select">${templateOptions.map(o => `<option value="${o}"${o === defaultTemplate ? ' selected' : ''}>${o}</option>`).join('')}</select></td>
+                <td class="config-cell">${configHtml}</td>
+              </tr>`;
+            }
+            html += '</tbody></table>';
+          }
+        } else if (useSourceSelect) {
+          // Select for source, fixed for each target
           for (const targetLabel of targetLabels) {
             html += `<div class="model-item">
               <div class="rel-row">
@@ -976,7 +1034,7 @@
                   <button type="button" class="set-to-target-btn" style="font-size: 11px; padding: 2px 6px; margin-left: 4px;">Set to Target</button>
                 </div>
                 <div class="rel-source">
-                  <span class="fixed-label">${escapeHtml(sourceLabel)}</span>
+                  <select class="source-select">${nodeLabels.map(l => `<option value="${l}">${l}</option>`).join('')}</select>
                 </div>
                 <div class="rel-target">
                   <span class="fixed-label">${escapeHtml(targetLabel)}</span>
@@ -1001,31 +1059,94 @@
               }
               html += '</tbody></table>';
             }
-            // // Source labels info (only show if there were multiple sources originally)
-            // if (info.sourceNodeLabels && info.sourceNodeLabels.length > 1) {
-            //   html += '<div class="model-sub"><strong>Source Node Labels:</strong><ul>';
-            //   for (const lbl of info.sourceNodeLabels) {
-            //     html += `<li>${escapeHtml(lbl)}</li>`;
-            //   }
-            //   html += '</ul></div>';
-            // }
-            // // Target labels info (only show if there were multiple targets originally)
-            // if (info.targetNodeLabels && info.targetNodeLabels.length > 1) {
-            //   html += '<div class="model-sub"><strong>Target Node Labels:</strong><ul>';
-            //   for (const lbl of info.targetNodeLabels) {
-            //     html += `<li>${escapeHtml(lbl)}</li>`;
-            //   }
-            //   html += '</ul></div>';
-            // }
-            // Undirected labels
-            if (info.undirectedNodeLabels && info.undirectedNodeLabels.length) {
-              html += '<div class="model-sub"><strong>Undirected Node Labels:</strong><ul>';
-              for (const lbl of info.undirectedNodeLabels) {
-                html += `<li>${escapeHtml(lbl)}</li>`;
+          }
+        } else if (useTargetSelect) {
+          // Fixed for each source, select for target
+          for (const sourceLabel of sourceLabels) {
+            html += `<div class="model-item">
+              <div class="rel-row">
+                <div class="rel-type"><strong>${escapeHtml(type)}</strong></div>
+                <div class="rel-count">
+                  <input type="range" min="0" max="70" value="0" class="count-slider"> <output>0</output>
+                  <button type="button" class="set-to-source-btn" style="font-size: 11px; padding: 2px 6px; margin-left: 8px;">Set to Source</button>
+                  <button type="button" class="set-to-target-btn" style="font-size: 11px; padding: 2px 6px; margin-left: 4px;">Set to Target</button>
+                </div>
+                <div class="rel-source">
+                  <span class="fixed-label">${escapeHtml(sourceLabel)}</span>
+                </div>
+                <div class="rel-target">
+                  <select class="target-select">${nodeLabels.map(l => `<option value="${l}">${l}</option>`).join('')}</select>
+                </div>
+              </div>
+            </div>`;
+            // Properties
+            if (info.properties && info.properties.length) {
+              html += '<table class="model-table"><thead><tr><th>Property name</th><th>Type</th><th>Occurrence %</th><th>Filling template</th><th>Filling config</th></tr></thead><tbody>';
+              for (const prop of info.properties.sort((a, b) => a.key.localeCompare(b.key))) {
+                const propType = prop.type || 'String';
+                const defaultTemplate = propType === 'String' ? 'uuid' : propType === 'DateTime' ? 'random datetime' : propType === 'Point' ? 'random point' : 'distribution';
+                const templateOptions = getTemplateOptions(propType);
+                const configHtml = getConfigHtml(defaultTemplate);
+                html += `<tr>
+                  <td>${escapeHtml(prop.key)}</td>
+                  <td><select class="type-select">${neo4jTypes.map(t => `<option value="${t}"${t === propType ? ' selected' : ''}>${t}</option>`).join('')}</select></td>
+                  <td><input type="range" min="0" max="100" value="100" class="occ-slider"> <output>100</output>%</td>
+                  <td><select class="template-select">${templateOptions.map(o => `<option value="${o}"${o === defaultTemplate ? ' selected' : ''}>${o}</option>`).join('')}</select></td>
+                  <td class="config-cell">${configHtml}</td>
+                </tr>`;
               }
-              html += '</ul></div>';
+              html += '</tbody></table>';
             }
           }
+        } else {
+          // Fixed for both, for each combination
+          for (const sourceLabel of sourceLabels) {
+            for (const targetLabel of targetLabels) {
+              html += `<div class="model-item">
+                <div class="rel-row">
+                  <div class="rel-type"><strong>${escapeHtml(type)}</strong></div>
+                  <div class="rel-count">
+                    <input type="range" min="0" max="70" value="0" class="count-slider"> <output>0</output>
+                    <button type="button" class="set-to-source-btn" style="font-size: 11px; padding: 2px 6px; margin-left: 8px;">Set to Source</button>
+                    <button type="button" class="set-to-target-btn" style="font-size: 11px; padding: 2px 6px; margin-left: 4px;">Set to Target</button>
+                  </div>
+                  <div class="rel-source">
+                    <span class="fixed-label">${escapeHtml(sourceLabel)}</span>
+                  </div>
+                  <div class="rel-target">
+                    <span class="fixed-label">${escapeHtml(targetLabel)}</span>
+                  </div>
+                </div>
+              </div>`;
+              // Properties
+              if (info.properties && info.properties.length) {
+                html += '<table class="model-table"><thead><tr><th>Property name</th><th>Type</th><th>Occurrence %</th><th>Filling template</th><th>Filling config</th></tr></thead><tbody>';
+                for (const prop of info.properties.sort((a, b) => a.key.localeCompare(b.key))) {
+                  const propType = prop.type || 'String';
+                  const defaultTemplate = propType === 'String' ? 'uuid' : propType === 'DateTime' ? 'random datetime' : propType === 'Point' ? 'random point' : 'distribution';
+                  const templateOptions = getTemplateOptions(propType);
+                  const configHtml = getConfigHtml(defaultTemplate);
+                  html += `<tr>
+                    <td>${escapeHtml(prop.key)}</td>
+                    <td><select class="type-select">${neo4jTypes.map(t => `<option value="${t}"${t === propType ? ' selected' : ''}>${t}</option>`).join('')}</select></td>
+                    <td><input type="range" min="0" max="100" value="100" class="occ-slider"> <output>100</output>%</td>
+                    <td><select class="template-select">${templateOptions.map(o => `<option value="${o}"${o === defaultTemplate ? ' selected' : ''}>${o}</option>`).join('')}</select></td>
+                    <td class="config-cell">${configHtml}</td>
+                  </tr>`;
+                }
+                html += '</tbody></table>';
+              }
+            }
+          }
+        }
+        
+        // Undirected labels
+        if (info.undirectedNodeLabels && info.undirectedNodeLabels.length) {
+          html += '<div class="model-sub"><strong>Undirected Node Labels:</strong><ul>';
+          for (const lbl of info.undirectedNodeLabels) {
+            html += `<li>${escapeHtml(lbl)}</li>`;
+          }
+          html += '</ul></div>';
         }
       }
       html += '</div>';
@@ -1162,10 +1283,10 @@
       document.querySelectorAll('.set-to-source-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {
           const item = e.target.closest('.model-item');
-          const sourceLabelSpan = item.querySelector('.rel-source .fixed-label');
+          const sourceEl = item.querySelector('.rel-source .source-select') || item.querySelector('.rel-source .fixed-label');
           const countSlider = item.querySelector('.count-slider');
-          if (sourceLabelSpan && countSlider) {
-            const sourceLabel = sourceLabelSpan.textContent.trim();
+          if (sourceEl && countSlider) {
+            const sourceLabel = sourceEl.tagName === 'SELECT' ? sourceEl.value : sourceEl.textContent.trim();
             // Find the node label count slider
             const nodeSections = document.querySelectorAll('.model-section');
             for (const section of nodeSections) {
@@ -1192,10 +1313,10 @@
       document.querySelectorAll('.set-to-target-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {
           const item = e.target.closest('.model-item');
-          const targetLabelSpan = item.querySelector('.rel-target .fixed-label');
+          const targetEl = item.querySelector('.rel-target .target-select') || item.querySelector('.rel-target .fixed-label');
           const countSlider = item.querySelector('.count-slider');
-          if (targetLabelSpan && countSlider) {
-            const targetLabel = targetLabelSpan.textContent.trim();
+          if (targetEl && countSlider) {
+            const targetLabel = targetEl.tagName === 'SELECT' ? targetEl.value : targetEl.textContent.trim();
             // Find the node label count slider
             const nodeSections = document.querySelectorAll('.model-section');
             for (const section of nodeSections) {
@@ -1347,10 +1468,10 @@
             const type = item.querySelector('strong').textContent.trim();
             const countSlider = item.querySelector('.count-slider');
             const count = countSlider ? parseInt(countSlider.value) : 0;
-            const sourceSpan = item.querySelector('.rel-source .fixed-label');
-            const targetSpan = item.querySelector('.rel-target .fixed-label');
-            const source = sourceSpan ? sourceSpan.textContent.trim() : '';
-            const target = targetSpan ? targetSpan.textContent.trim() : '';
+            const sourceEl = item.querySelector('.rel-source .source-select') || item.querySelector('.rel-source .fixed-label');
+            const targetEl = item.querySelector('.rel-target .target-select') || item.querySelector('.rel-target .fixed-label');
+            const source = sourceEl ? (sourceEl.tagName === 'SELECT' ? sourceEl.value : sourceEl.textContent.trim()) : '';
+            const target = targetEl ? (targetEl.tagName === 'SELECT' ? targetEl.value : targetEl.textContent.trim()) : '';
             if (count > 0 && source && target) {
               const properties = [];
               const table = item.nextElementSibling;
@@ -1401,12 +1522,13 @@
                 });
               }
               
-              config.relationshipTypes[type] = {
+              if (!config.relationshipTypes[type]) config.relationshipTypes[type] = [];
+              config.relationshipTypes[type].push({
                 count: Math.round(Math.pow(10, count / 10)),
                 source: source,
                 target: target,
                 properties: properties
-              };
+              });
             }
           });
         }
@@ -1603,23 +1725,46 @@
       }
       
       // Generate relationship creation statements
-      for (const [type, info] of Object.entries(config.relationshipTypes)) {
-        const count = info.count;
-        const sourceLabel = info.source;
-        const targetLabel = info.target;
-        if (count > 0 && sourceLabel && targetLabel) {
-          const props = info.properties || [];
-          let createStmt = `MATCH (s:${sourceLabel}), (t:${targetLabel})\n\tWITH s, t ORDER BY rand() LIMIT 1\n\tCREATE (s)-[r:${type}]->(t)`;
-          if (props.length > 0) {
-            const setAssignments = props.map(p => {
-              const value = generateValueExpression(p);
-              return `r.${p.key} = ${value}`;
-            });
-            createStmt += `\n\tSET ${setAssignments.join(', ')}`;
+      for (const [type, infos] of Object.entries(config.relationshipTypes)) {
+        if (Array.isArray(infos)) {
+          for (const info of infos) {
+            const count = info.count;
+            const sourceLabel = info.source;
+            const targetLabel = info.target;
+            if (count > 0 && sourceLabel && targetLabel) {
+              const props = info.properties || [];
+              let createStmt = `MATCH (s:${sourceLabel}), (t:${targetLabel})\n\tWITH s, t ORDER BY rand() LIMIT 1\n\tCREATE (s)-[r:${type}]->(t)`;
+              if (props.length > 0) {
+                const setAssignments = props.map(p => {
+                  const value = generateValueExpression(p);
+                  return `r.${p.key} = ${value}`;
+                });
+                createStmt += `\n\tSET ${setAssignments.join(', ')}`;
+              }
+              
+              const batched = `UNWIND range(1, ${count}) AS i\nCALL {\n\t${createStmt}\n} IN TRANSACTIONS OF 1000 ROWS`;
+              statements.push(batched);
+            }
           }
-          
-          const batched = `UNWIND range(1, ${count}) AS i\nCALL {\n\t${createStmt}\n} IN TRANSACTIONS OF 1000 ROWS`;
-          statements.push(batched);
+        } else {
+          // Legacy single object format
+          const count = infos.count;
+          const sourceLabel = infos.source;
+          const targetLabel = infos.target;
+          if (count > 0 && sourceLabel && targetLabel) {
+            const props = infos.properties || [];
+            let createStmt = `MATCH (s:${sourceLabel}), (t:${targetLabel})\n\tWITH s, t ORDER BY rand() LIMIT 1\n\tCREATE (s)-[r:${type}]->(t)`;
+            if (props.length > 0) {
+              const setAssignments = props.map(p => {
+                const value = generateValueExpression(p);
+                return `r.${p.key} = ${value}`;
+              });
+              createStmt += `\n\tSET ${setAssignments.join(', ')}`;
+            }
+            
+            const batched = `UNWIND range(1, ${count}) AS i\nCALL {\n\t${createStmt}\n} IN TRANSACTIONS OF 1000 ROWS`;
+            statements.push(batched);
+          }
         }
       }
       
