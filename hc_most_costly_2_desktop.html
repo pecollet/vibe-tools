@@ -618,13 +618,13 @@
           'faker.phone.number', 'faker.finance.accountNumber'
         ];
       } else if (type === 'Boolean') {
-        return ['always TRUE', 'always FALSE', 'random'];
+        return ['random', 'always TRUE', 'always FALSE'];
       } else if (type === 'DateTime') {
         return ['random datetime', 'datetime from list', 'faker.date.past', 'faker.date.future', 'faker.date.recent'];
       } else if (type === 'Point') {
         return ['random point'];
       } else {
-        return ['value from list', 'distribution'];
+        return [ 'distribution', 'value from list'];
       }
     }
 
@@ -642,7 +642,7 @@
         if (template === 'value from list' || template === 'string from list' || template === 'datetime from list') {
           return '<input type="text" placeholder="comma-separated list">';
         } else if (template === 'distribution') {
-          return '<label><output>-32768</output> Min: <input type="range" min="-32768" max="32767" value="-32768" class="min-slider"></label> <label><output>32767</output> Max: <input type="range" min="-32768" max="32767" value="32767" class="max-slider"></label> <label>Dist: <select><option>random / uniform</option><option>normal</option><option>power law</option></select></label>';
+          return '<label><output>0</output> Min: <input type="range" min="-32768" max="32767" value="0" class="min-slider"></label> <label><output>2000</output> Max: <input type="range" min="-32768" max="32767" value="2000" class="max-slider"></label> <label>Dist: <select><option>random / uniform</option><option>normal</option><option>power law</option></select></label>';
         } else if (template === 'random datetime') {
           return '<label>Min: <input type="date" value="1970-01-01"></label> <label>Max: <input type="date" value="2031-01-01"></label>';
         } else if (template === 'random point') {
@@ -811,7 +811,7 @@
           if (template === 'value from list' || template === 'string from list' || template === 'datetime from list') {
             html = '<input type="text" placeholder="comma-separated list">';
           } else if (template === 'distribution') {
-            html = '<label><output>-32768</output> Min: <input type="range" min="-32768" max="32767" value="-32768" class="min-slider"></label> <label><output>32767</output> Max: <input type="range" min="-32768" max="32767" value="32767" class="max-slider"></label> <label>Dist: <select><option>random / uniform</option><option>normal</option><option>power law</option></select></label>';
+            html = '<label><output>0</output> Min: <input type="range" min="-32768" max="32767" value="0" class="min-slider"></label> <label><output>2000</output> Max: <input type="range" min="-32768" max="32767" value="2000" class="max-slider"></label> <label>Dist: <select><option>random / uniform</option><option>normal</option><option>power law</option></select></label>';
           } else if (template === 'random datetime') {
             html = '<label>Min: <input type="date" value="1970-01-01"></label> <label>Max: <input type="date" value="2031-01-01"></label>';
           } else if (template === 'random point') {
