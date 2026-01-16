@@ -643,6 +643,8 @@
         inputs.forEach((inp, j) => {
           settings[`node-prop-${i}-config-${j}`] = inp.value;
         });
+        const indexCheckbox = row.querySelector('.index-checkbox');
+        if (indexCheckbox) settings[`node-prop-${i}-index`] = indexCheckbox.checked;
       });
 
       // Relationship counts
@@ -671,6 +673,8 @@
         inputs.forEach((inp, j) => {
           settings[`rel-prop-${i}-config-${j}`] = inp.value;
         });
+        const indexCheckbox = row.querySelector('.index-checkbox');
+        if (indexCheckbox) settings[`rel-prop-${i}-index`] = indexCheckbox.checked;
       });
 
       localStorage.setItem(`settings-${currentZipName}`, JSON.stringify(settings));
@@ -722,6 +726,9 @@
             const configCell = row.querySelector('.config-cell');
             const inputs = configCell ? configCell.querySelectorAll('input, select') : [];
             if (inputs[j]) inputs[j].value = value;
+          } else if (key.includes('-index')) {
+            const checkbox = row.querySelector('.index-checkbox');
+            if (checkbox) checkbox.checked = value;
           }
         } else if (key.startsWith('rel-') && key.endsWith('-count') && key.includes('-count')) {
           // Parse key format: rel-{type}-{source}-{target}-count
@@ -796,6 +803,9 @@
             const configCell = row.querySelector('.config-cell');
             const inputs = configCell ? configCell.querySelectorAll('input, select') : [];
             if (inputs[j]) inputs[j].value = value;
+          } else if (key.includes('-index')) {
+            const checkbox = row.querySelector('.index-checkbox');
+            if (checkbox) checkbox.checked = value;
           }
         }
       });
@@ -958,7 +968,7 @@
           </div>
         </div>`;
         if (info.properties && info.properties.length) {
-          html += '<table class="model-table"><thead><tr><th>Property name</th><th>Type</th><th>Occurrence %</th><th>Filling template</th><th>Filling config</th></tr></thead><tbody>';
+          html += '<table class="model-table"><thead><tr><th>Property name</th><th>Type</th><th>Occurrence %</th><th>Filling template</th><th>Filling config</th><th>INDEX</th></tr></thead><tbody>';
           for (const prop of info.properties.sort((a, b) => a.key.localeCompare(b.key))) {
             const propType = prop.type || 'String';
             const defaultTemplate = propType === 'String' ? 'uuid' : propType === 'DateTime' ? 'random datetime' : propType === 'Point' ? 'random point' : 'distribution';
@@ -970,6 +980,7 @@
               <td><input type="range" min="0" max="100" value="100" class="occ-slider"> <output>100</output>%</td>
               <td><select class="template-select">${templateOptions.map(o => `<option value="${o}"${o === defaultTemplate ? ' selected' : ''}>${o}</option>`).join('')}</select></td>
               <td class="config-cell">${configHtml}</td>
+              <td><input type="checkbox" class="index-checkbox"></td>
             </tr>`;
           }
           html += '</tbody></table>';
@@ -1006,7 +1017,7 @@
           </div>`;
           // Properties
           if (info.properties && info.properties.length) {
-            html += '<table class="model-table"><thead><tr><th>Property name</th><th>Type</th><th>Occurrence %</th><th>Filling template</th><th>Filling config</th></tr></thead><tbody>';
+            html += '<table class="model-table"><thead><tr><th>Property name</th><th>Type</th><th>Occurrence %</th><th>Filling template</th><th>Filling config</th><th>INDEX</th></tr></thead><tbody>';
             for (const prop of info.properties.sort((a, b) => a.key.localeCompare(b.key))) {
               const propType = prop.type || 'String';
               const defaultTemplate = propType === 'String' ? 'uuid' : propType === 'DateTime' ? 'random datetime' : propType === 'Point' ? 'random point' : 'distribution';
@@ -1018,6 +1029,7 @@
                 <td><input type="range" min="0" max="100" value="100" class="occ-slider"> <output>100</output>%</td>
                 <td><select class="template-select">${templateOptions.map(o => `<option value="${o}"${o === defaultTemplate ? ' selected' : ''}>${o}</option>`).join('')}</select></td>
                 <td class="config-cell">${configHtml}</td>
+                <td><input type="checkbox" class="index-checkbox"></td>
               </tr>`;
             }
             html += '</tbody></table>';
@@ -1043,7 +1055,7 @@
             </div>`;
             // Properties
             if (info.properties && info.properties.length) {
-              html += '<table class="model-table"><thead><tr><th>Property name</th><th>Type</th><th>Occurrence %</th><th>Filling template</th><th>Filling config</th></tr></thead><tbody>';
+              html += '<table class="model-table"><thead><tr><th>Property name</th><th>Type</th><th>Occurrence %</th><th>Filling template</th><th>Filling config</th><th>INDEX</th></tr></thead><tbody>';
               for (const prop of info.properties.sort((a, b) => a.key.localeCompare(b.key))) {
                 const propType = prop.type || 'String';
                 const defaultTemplate = propType === 'String' ? 'uuid' : propType === 'DateTime' ? 'random datetime' : propType === 'Point' ? 'random point' : 'distribution';
@@ -1055,6 +1067,7 @@
                   <td><input type="range" min="0" max="100" value="100" class="occ-slider"> <output>100</output>%</td>
                   <td><select class="template-select">${templateOptions.map(o => `<option value="${o}"${o === defaultTemplate ? ' selected' : ''}>${o}</option>`).join('')}</select></td>
                   <td class="config-cell">${configHtml}</td>
+                  <td><input type="checkbox" class="index-checkbox"></td>
                 </tr>`;
               }
               html += '</tbody></table>';
@@ -1081,7 +1094,7 @@
             </div>`;
             // Properties
             if (info.properties && info.properties.length) {
-              html += '<table class="model-table"><thead><tr><th>Property name</th><th>Type</th><th>Occurrence %</th><th>Filling template</th><th>Filling config</th></tr></thead><tbody>';
+              html += '<table class="model-table"><thead><tr><th>Property name</th><th>Type</th><th>Occurrence %</th><th>Filling template</th><th>Filling config</th><th>INDEX</th></tr></thead><tbody>';
               for (const prop of info.properties.sort((a, b) => a.key.localeCompare(b.key))) {
                 const propType = prop.type || 'String';
                 const defaultTemplate = propType === 'String' ? 'uuid' : propType === 'DateTime' ? 'random datetime' : propType === 'Point' ? 'random point' : 'distribution';
@@ -1093,6 +1106,7 @@
                   <td><input type="range" min="0" max="100" value="100" class="occ-slider"> <output>100</output>%</td>
                   <td><select class="template-select">${templateOptions.map(o => `<option value="${o}"${o === defaultTemplate ? ' selected' : ''}>${o}</option>`).join('')}</select></td>
                   <td class="config-cell">${configHtml}</td>
+                  <td><input type="checkbox" class="index-checkbox"></td>
                 </tr>`;
               }
               html += '</tbody></table>';
@@ -1120,7 +1134,7 @@
               </div>`;
               // Properties
               if (info.properties && info.properties.length) {
-                html += '<table class="model-table"><thead><tr><th>Property name</th><th>Type</th><th>Occurrence %</th><th>Filling template</th><th>Filling config</th></tr></thead><tbody>';
+                html += '<table class="model-table"><thead><tr><th>Property name</th><th>Type</th><th>Occurrence %</th><th>Filling template</th><th>Filling config</th><th>INDEX</th></tr></thead><tbody>';
                 for (const prop of info.properties.sort((a, b) => a.key.localeCompare(b.key))) {
                   const propType = prop.type || 'String';
                   const defaultTemplate = propType === 'String' ? 'uuid' : propType === 'DateTime' ? 'random datetime' : propType === 'Point' ? 'random point' : 'distribution';
@@ -1132,6 +1146,7 @@
                     <td><input type="range" min="0" max="100" value="100" class="occ-slider"> <output>100</output>%</td>
                     <td><select class="template-select">${templateOptions.map(o => `<option value="${o}"${o === defaultTemplate ? ' selected' : ''}>${o}</option>`).join('')}</select></td>
                     <td class="config-cell">${configHtml}</td>
+                    <td><input type="checkbox" class="index-checkbox"></td>
                   </tr>`;
                 }
                 html += '</tbody></table>';
@@ -1412,19 +1427,21 @@
               if (table && table.tagName === 'TABLE' && table.classList.contains('model-table')) {
                 table.querySelectorAll('tbody tr').forEach(row => {
                   const cells = row.querySelectorAll('td');
-                  if (cells.length >= 5) {
+                  if (cells.length >= 6) {
                     const propName = cells[0].textContent.trim();
                     const typeSelect = cells[1].querySelector('.type-select');
                     const occSlider = cells[2].querySelector('.occ-slider');
                     const templateSelect = cells[3].querySelector('.template-select');
                     const configCell = cells[4];
+                    const indexCheckbox = cells[5].querySelector('.index-checkbox');
                     
                     const propConfig = {
                       key: propName,
                       type: typeSelect ? typeSelect.value : 'String',
                       occurrence: occSlider ? parseInt(occSlider.value) : 100,
                       template: templateSelect ? templateSelect.value : 'uuid',
-                      config: {}
+                      config: {},
+                      index: indexCheckbox ? indexCheckbox.checked : false
                     };
                     
                     // Collect config values based on template
@@ -1478,19 +1495,21 @@
               if (table && table.tagName === 'TABLE' && table.classList.contains('model-table')) {
                 table.querySelectorAll('tbody tr').forEach(row => {
                   const cells = row.querySelectorAll('td');
-                  if (cells.length >= 5) {
+                  if (cells.length >= 6) {
                     const propName = cells[0].textContent.trim();
                     const typeSelect = cells[1].querySelector('.type-select');
                     const occSlider = cells[2].querySelector('.occ-slider');
                     const templateSelect = cells[3].querySelector('.template-select');
                     const configCell = cells[4];
+                    const indexCheckbox = cells[5].querySelector('.index-checkbox');
                     
                     const propConfig = {
                       key: propName,
                       type: typeSelect ? typeSelect.value : 'String',
                       occurrence: occSlider ? parseInt(occSlider.value) : 100,
                       template: templateSelect ? templateSelect.value : 'uuid',
-                      config: {}
+                      config: {},
+                      index: indexCheckbox ? indexCheckbox.checked : false
                     };
                     
                     // Collect config values based on template
@@ -1549,6 +1568,34 @@
       }
       
       const statements = [];
+      
+      // Generate index statements first
+      for (const [label, info] of Object.entries(config.nodeLabels)) {
+        for (const prop of info.properties) {
+          if (prop.index) {
+            statements.push(`CREATE INDEX idx_${label}_${prop.key} IF NOT EXISTS FOR (n:${label}) ON (n.${prop.key})`);
+          }
+        }
+      }
+      
+      for (const [type, infos] of Object.entries(config.relationshipTypes)) {
+        if (Array.isArray(infos)) {
+          for (const info of infos) {
+            for (const prop of info.properties) {
+              if (prop.index) {
+                statements.push(`CREATE INDEX idx_${type}_${prop.key} IF NOT EXISTS FOR ()-[r:${type}]-() ON (r.${prop.key})`);
+              }
+            }
+          }
+        } else {
+          // Legacy single object format
+          for (const prop of infos.properties) {
+            if (prop.index) {
+              statements.push(`CREATE idx_${type}_${prop.key} IF NOT EXISTS INDEX FOR ()-[r:${type}]-() ON (r.${prop.key})`);
+            }
+          }
+        }
+      }
       
       function generateValueExpression(propConfig) {
         const { type, template, config: propCfg } = propConfig;
