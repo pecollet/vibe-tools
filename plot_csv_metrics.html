@@ -6,6 +6,7 @@
   <title>CSV Metrics Timeline Canvas</title>
   <script src="https://cdn.plot.ly/plotly-2.30.0.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
   <style>
     :root { --bg:#0b1220; --panel:#101b32; --text:#e8eefc; --muted:#9bb0db; --accent:#7aa2ff; --border:rgba(255,255,255,.12); }
     html,body{height:100%;}
@@ -44,7 +45,7 @@
         <div class="hd">
           <div>
             <h1>CSV Metrics Timeline</h1>
-            <div class="sub">Drop any number of CSV files. Column 1 = epoch timestamp. Column 2 = value. Extra columns can be histogram bins or rate columns.</div>
+            <div class="sub">Drop any number of CSV files (including gzip-compressed .gz files). Column 1 = epoch timestamp. Column 2 = value. Extra columns can be histogram bins or rate columns.</div>
           </div>
           <div class="row">
             <button class="btn" id="clearBtn" title="Remove all loaded files">Clear</button>
@@ -54,7 +55,7 @@
           <div class="drop" id="dropZone">
             <div class="row">
               <button class="btn" id="pickBtn">Choose CSV files…</button>
-              <input id="fileInput" type="file" accept=".csv,text/csv" multiple style="display:none" />
+              <input id="fileInput" type="file" accept=".csv,text/csv,.gz" multiple style="display:none" />
               <span class="pill" id="loadedPill">0 files loaded</span>
             </div>
             <div class="hint">
@@ -66,6 +67,7 @@
               <div class="mono">epoch,bin_0_10,bin_10_20,bin_20_30</div>
               <div style="margin-top:8px">Rate format (example):</div>
               <div class="mono">epoch,value,rate</div>
+              <div style="margin-top:8px">Supports gzip-compressed CSV files (.gz)</div>
             </div>
           </div>
 
@@ -442,12 +444,36 @@
 
   function parseFile(file) {
     return new Promise((resolve, reject) => {
-      Papa.parse(file, {
-        skipEmptyLines: true,
-        dynamicTyping: false,
-        complete: (res) => resolve(res.data),
-        error: (err) => reject(err)
-      });
+      const isGzipped = file.name.toLowerCase().endsWith('.gz');
+      
+      if (isGzipped) {
+        // Handle gzipped files
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          try {
+            const compressed = new Uint8Array(e.target.result);
+            const decompressed = pako.ungzip(compressed, { to: 'string' });
+            Papa.parse(decompressed, {
+              skipEmptyLines: true,
+              dynamicTyping: false,
+              complete: (res) => resolve(res.data),
+              error: (err) => reject(err)
+            });
+          } catch (err) {
+            reject(err);
+          }
+        };
+        reader.onerror = () => reject(new Error('Failed to read gzipped file'));
+        reader.readAsArrayBuffer(file);
+      } else {
+        // Handle regular CSV files
+        Papa.parse(file, {
+          skipEmptyLines: true,
+          dynamicTyping: false,
+          complete: (res) => resolve(res.data),
+          error: (err) => reject(err)
+        });
+      }
     });
   }
 
