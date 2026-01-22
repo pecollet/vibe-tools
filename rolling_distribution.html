@@ -179,7 +179,9 @@
     animationId: null,
     timestampColumn: null,
     valueColumns: [],
-    categoryColumns: []
+    categoryColumns: [],
+    groupColorMap: {},
+    currentGroupCol: null
   };
 
   const $ = (id) => document.getElementById(id);
@@ -296,7 +298,7 @@ function parseData(rawData) {
     };
   }
 
-function updateColumnSelect() {
+  function updateColumnSelect() {
     columnSelect.innerHTML = '<option value="">Select column...</option>';
     filterColumn.innerHTML = '<option value="">No filter</option>';
     const groupByColumn = $('groupByColumn'); // Get the element
@@ -339,13 +341,18 @@ function updateColumnSelect() {
     });
   }
 
-function loadData(parsed) {
+  function loadData(parsed) {
     state.data = parsed.data;
     state.timestampColumn = parsed.timestampColumn;
     state.valueColumns = parsed.valueColumns;
-    state.categoryColumns = parsed.categoryColumns; // Store categories
+    state.categoryColumns = parsed.categoryColumns;
     state.currentTimeIndex = 0;
     state.isPlaying = false;
+    
+    // --- NEW: Reset Grouping State on Load ---
+    state.groupColorMap = {};
+    state.currentGroupCol = null;
+    // -----------------------------------------
 
     updateColumnSelect();
     updateDataStatus();
@@ -435,6 +442,35 @@ function getWindowData(currentIndex) {
     return windowData;
   }
 
+  function generateColorMap(colName) {
+    if (!state.data) return {};
+    
+    // 1. Find all unique values in the entire dataset for this column
+    const uniqueValues = new Set();
+    state.data.forEach(row => {
+      // Match the logic used in getWindowData
+      const val = row[colName] ?? 'Unknown';
+      uniqueValues.add(val.toString());
+    });
+    
+    const sortedGroups = Array.from(uniqueValues).sort();
+    
+    // 2. Standard Plotly color sequence (10 colors)
+    const colors = [
+      '#636efa', '#EF553B', '#00cc96', '#ab63fa', '#FFA15A', 
+      '#19d3f3', '#FF6692', '#B6E880', '#FF97FF', '#FECB52'
+    ];
+    
+    // 3. Map each group to a color
+    const map = {};
+    sortedGroups.forEach((group, i) => {
+      // Cycle through colors if there are more groups than colors
+      map[group] = colors[i % colors.length];
+    });
+    
+    return map;
+  }
+
 function drawHistogram() {
     if (!state.data || !columnSelect.value) {
       Plotly.react('plot', [], {
@@ -444,6 +480,18 @@ function drawHistogram() {
       });
       return;
     }
+
+    // --- NEW: Handle Global Color Mapping ---
+    const groupByColumn = $('groupByColumn');
+    const groupColName = groupByColumn ? groupByColumn.value : "";
+    const isGrouping = groupColName !== "";
+
+    // If the group column changed, regenerate the global color map
+    if (isGrouping && state.currentGroupCol !== groupColName) {
+        state.groupColorMap = generateColorMap(groupColName);
+        state.currentGroupCol = groupColName;
+    }
+    // ----------------------------------------
 
     const windowData = getWindowData(state.currentTimeIndex);
     
@@ -470,7 +518,6 @@ function drawHistogram() {
       return;
     }
 
-    // --- Bins Calculation (Global for the window) ---
     const binCountVal = parseInt(binCount.value) || 20;
     const allValues = windowData.map(d => d.value);
     const min = Math.min(...allValues);
@@ -478,7 +525,7 @@ function drawHistogram() {
     const binSize = min === max ? 1 : (max - min) / binCountVal;
     const loops = min === max ? 1 : binCountVal;
 
-    // Generate Bin Labels/Ranges
+    // Generate Bin Ranges
     const binRanges = [];
     for (let i = 0; i < loops; i++) {
         const start = min + i * binSize;
@@ -486,15 +533,11 @@ function drawHistogram() {
         binRanges.push({ start, end, label: min === max ? `${min}` : `${start.toFixed(2)} - ${end.toFixed(2)}` });
     }
 
-    // --- Grouping Logic ---
-    const groupByColumn = $('groupByColumn');
-    const isGrouping = groupByColumn && groupByColumn.value !== "";
-    
-    // Group the data
+    // Group the data locally for this window
     const groups = {};
     if (isGrouping) {
         windowData.forEach(d => {
-            const g = d.group;
+            const g = (d.group ?? 'Unknown').toString();
             if (!groups[g]) groups[g] = [];
             groups[g].push(d.value);
         });
@@ -506,17 +549,24 @@ function drawHistogram() {
     const traces = Object.keys(groups).sort().map(groupName => {
         const values = groups[groupName];
         const counts = binRanges.map((bin, i) => {
-            // Count values in this bin for this group
             return values.filter(v => 
                 i === loops - 1 ? (v >= bin.start && v <= bin.end) : (v >= bin.start && v < bin.end)
             ).length;
         });
+
+        // --- NEW: Apply Fixed Color ---
+        const traceColor = isGrouping ? state.groupColorMap[groupName] : 'rgba(122,162,255,0.8)';
+        // ------------------------------
 
         return {
             type: 'bar',
             name: groupName,
             x: binRanges.map(b => b.label),
             y: counts,
+            marker: {
+                color: traceColor,
+                line: { color: traceColor, width: 1 } // Match border to fill
+            },
             hovertemplate: `${isGrouping ? 'Group: ' + groupName + '<br>' : ''}Range: %{x}<br>Count: %{y}<extra></extra>`
         };
     });
@@ -526,7 +576,7 @@ function drawHistogram() {
         text: `Distribution of ${columnSelect.value}<br><span style="font-size:12px;color:#9bb0db">${fmt(startTime)} — ${fmt(endTime)} (n=${windowData.length})</span>`,
         font: { color: '#e8eefc' }
       },
-      barmode: isGrouping ? 'stack' : 'group', // Enable Stacking
+      barmode: isGrouping ? 'stack' : 'group',
       xaxis: {
         title: 'Value Range',
         automargin: true,
@@ -562,7 +612,7 @@ function drawHistogram() {
     Plotly.react('plot', traces, layout, config);
     updateStatus(`Showing ${windowData.length} points from current window`);
   }
-
+  
   function animate() {
     if (!state.isPlaying) return;
 
