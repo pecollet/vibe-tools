@@ -1,0 +1,723 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Rolling Distribution Histogram</title>
+  <script src="https://cdn.plot.ly/plotly-2.30.0.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <style>
+    :root { --bg:#0b1220; --panel:#101b32; --text:#e8eefc; --muted:#9bb0db; --accent:#7aa2ff; --border:rgba(255,255,255,.12); }
+    html,body{height:100%;}
+    body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;background:linear-gradient(180deg,var(--bg),#060a14);color:var(--text);}
+    .wrap{max-width:1400px;margin:0 auto;padding:24px;display:flex;flex-direction:column;gap:16px;}
+    .top{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start;}
+    @media (max-width: 980px){.top{grid-template-columns:1fr;}}
+    .card{background:rgba(16,27,50,.85);border:1px solid var(--border);border-radius:18px;box-shadow:0 10px 35px rgba(0,0,0,.35);}
+    .card .hd{padding:16px 16px 10px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:12px;}
+    .card .hd h1{font-size:16px;margin:0;letter-spacing:.2px;}
+    .card .hd .sub{font-size:12px;color:var(--muted);}
+    .card .bd{padding:16px;}
+    .drop{border:1px dashed rgba(255,255,255,.25);border-radius:16px;padding:18px;display:flex;flex-direction:column;gap:10px;align-items:flex-start;justify-content:center;min-height:120px;background:rgba(0,0,0,.12);}
+    .drop.dragover{border-color:var(--accent);background:rgba(122,162,255,.12);}
+    .btn{appearance:none;border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.08);color:var(--text);padding:10px 12px;border-radius:12px;cursor:pointer;font-weight:600;}
+    .btn:hover{border-color:rgba(255,255,255,.28);}
+    .btn:active{background:rgba(255,255,255,.15);}
+    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;}
+    .pill{font-size:12px;border:1px solid rgba(255,255,255,.18);border-radius:999px;padding:6px 10px;color:var(--muted);}
+    label{font-size:12px;color:var(--muted);}
+    select,input[type="number"],input[type="range"]{accent-color:var(--accent);}
+    input[type="number"]{width:80px;padding:6px;border:1px solid var(--border);border-radius:6px;background:rgba(0,0,0,.2);color:var(--text);}
+    input[type="text"]{padding:6px;border:1px solid var(--border);border-radius:6px;background:rgba(0,0,0,.2);color:var(--text);}
+    .form-group{display:flex;flex-direction:column;gap:4px;}
+    .form-row{display:flex;gap:16px;flex-wrap:wrap;align-items:end;}
+    .control-group{display:flex;gap:8px;align-items:center;}
+    .animation-controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+    .slider-container{flex:1;min-width:200px;}
+    .time-display{font-size:12px;color:var(--accent);min-width:120px;text-align:center;}
+    #plot{height:600px;}
+    .hint{font-size:12px;color:var(--muted);line-height:1.35;}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:12px;color:#cdd9ff;}
+    .status{font-size:12px;color:var(--muted);margin-top:8px;}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <div class="card">
+        <div class="hd">
+          <div>
+            <h1>Data Input</h1>
+            <div class="sub">Drop CSV/TSV file or paste from clipboard. First column should be timestamp, others numerical values.</div>
+          </div>
+          <div class="row">
+            <button class="btn" id="clearBtn" title="Clear data">Clear</button>
+          </div>
+        </div>
+        <div class="bd">
+          <div class="drop" id="dropZone">
+            <div class="row">
+              <button class="btn" id="pickBtn">Choose file…</button>
+              <input id="fileInput" type="file" accept=".csv,.tsv,text/csv,text/tab-separated-values" style="display:none" />
+              <button class="btn" id="pasteBtn">Paste from clipboard</button>
+              <span class="pill" id="dataStatus">No data loaded</span>
+            </div>
+            <div class="hint">
+              <div>Expected format:</div>
+              <div class="mono">timestamp,value1,value2,...</div>
+              <div class="mono">2024-01-01T00:00:00Z,123.45,67.89</div>
+              <div class="mono">1735689600000,123.45,67.89</div>
+              <div style="margin-top:8px">Supports CSV and TSV files</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="hd">
+          <div>
+            <h1>Configuration</h1>
+            <div class="sub">Set histogram parameters, filters, and animation settings</div>
+          </div>
+        </div>
+        <div class="bd">
+          <div class="form-row">
+            <div class="form-group">
+              <label for="columnSelect">Value Column</label>
+              <select id="columnSelect" class="btn" style="padding:8px 10px">
+                <option value="">Select column...</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label for="binCount">Bin Count</label>
+              <input id="binCount" type="number" min="5" max="100" value="20" />
+            </div>
+
+            <div class="form-group">
+              <label for="windowSize">Window Size (minutes)</label>
+              <input id="windowSize" type="number" min="1" max="1440" value="1" />
+            </div>
+          </div>
+
+          <div style="height:16px"></div>
+
+          <div style="font-size:14px;font-weight:600;color:var(--text);margin-bottom:8px;">Filter</div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="filterColumn">Filter Column</label>
+              <select id="filterColumn" class="btn" style="padding:8px 10px">
+                <option value="">No filter</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label for="filterPredicate">Predicate</label>
+              <select id="filterPredicate" class="btn" style="padding:8px 10px">
+                <option value="equals">Equals</option>
+                <option value="contains">Contains</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label for="filterValue">Filter Value</label>
+              <input id="filterValue" type="text" placeholder="Enter filter value" style="width:120px;" />
+            </div>
+          </div>
+
+          <div style="height:16px"></div>
+
+          <div style="font-size:14px;font-weight:600;color:var(--text);margin-bottom:8px;">Group By</div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="groupByColumn">Group Column</label>
+              <select id="groupByColumn" class="btn" style="padding:8px 10px">
+                <option value="">No grouping</option>
+              </select>
+            </div>
+          </div>
+
+          <div style="height:16px"></div>
+
+          <div style="height:16px"></div>
+
+          <div class="animation-controls">
+            <button class="btn" id="playBtn">Play</button>
+            <button class="btn" id="pauseBtn" disabled>Pause</button>
+            <button class="btn" id="rewindBtn">Rewind</button>
+            <div class="slider-container">
+              <input id="timeSlider" type="range" min="0" max="100" value="0" style="width:100%" />
+            </div>
+            <div class="time-display" id="timeDisplay">--:--</div>
+          </div>
+
+          <div class="status" id="statusText">Ready to load data</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="hd">
+        <div>
+          <h1>Rolling Distribution</h1>
+          <div class="sub">Animated histogram of selected column over rolling time window</div>
+        </div>
+      </div>
+      <div class="bd" style="padding:0">
+        <div id="plot"></div>
+      </div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const state = {
+    data: null, // Array of objects with timestamp and values
+    columns: [],
+    currentTimeIndex: 0,
+    isPlaying: false,
+    animationId: null,
+    timestampColumn: null,
+    valueColumns: []
+  };
+
+  const $ = (id) => document.getElementById(id);
+  const dropZone = $('dropZone');
+  const pickBtn = $('pickBtn');
+  const fileInput = $('fileInput');
+  const pasteBtn = $('pasteBtn');
+  const dataStatus = $('dataStatus');
+  const clearBtn = $('clearBtn');
+  const columnSelect = $('columnSelect');
+  const binCount = $('binCount');
+  const windowSize = $('windowSize');
+  const stepSize = $('stepSize');
+  const speed = $('speed');
+  const filterColumn = $('filterColumn');
+  const filterPredicate = $('filterPredicate');
+  const filterValue = $('filterValue');
+  const playBtn = $('playBtn');
+  const pauseBtn = $('pauseBtn');
+  const rewindBtn = $('rewindBtn');
+  const timeSlider = $('timeSlider');
+  const timeDisplay = $('timeDisplay');
+  const statusText = $('statusText');
+
+  function updateStatus(text) {
+    statusText.textContent = text;
+  }
+
+  function coerceTimestamp(value) {
+    if (value === null || value === undefined) return null;
+    const s = value.toString().trim();
+    if (s === '') return null;
+
+    const n = Number(s);
+    if (Number.isFinite(n)) {
+      const ms = n >= 1e12 ? n : n * 1000; // ms vs seconds
+      return new Date(ms);
+    }
+
+    const t = Date.parse(s);
+    return Number.isNaN(t) ? null : new Date(t);
+  }
+
+  function toNumber(v) {
+    if (v === null || v === undefined) return NaN;
+    const s = v.toString().trim();
+    if (s === '') return NaN;
+    const n = Number(s);
+    return Number.isFinite(n) ? n : NaN;
+  }
+
+  function parseData(rawData) {
+    if (!rawData || rawData.length < 2) {
+      throw new Error('Data must have at least header and one data row');
+    }
+
+    const headers = rawData[0].map(h => (h ?? '').toString().trim());
+    const dataRows = rawData.slice(1);
+
+    // Assume first column is timestamp
+    const timestampCol = headers[0];
+    const valueCols = headers.slice(1).filter(h => h);
+
+    if (valueCols.length === 0) {
+      throw new Error('No numerical value columns found');
+    }
+
+    const parsed = dataRows.map(row => {
+      const obj = {};
+      headers.forEach((header, idx) => {
+        if (idx === 0) {
+          obj.timestamp = coerceTimestamp(row[idx]);
+        } else {
+          obj[header] = toNumber(row[idx]);
+        }
+      });
+      return obj;
+    }).filter(row => row.timestamp !== null).sort((a, b) => a.timestamp - b.timestamp);
+
+    if (parsed.length === 0) {
+      throw new Error('No valid timestamped rows found');
+    }
+
+    return {
+      data: parsed,
+      timestampColumn: timestampCol,
+      valueColumns: valueCols
+    };
+  }
+
+  function updateColumnSelect() {
+    columnSelect.innerHTML = '<option value="">Select column...</option>';
+    filterColumn.innerHTML = '<option value="">No filter</option>';
+    
+    if (state.valueColumns.length > 0) {
+      state.valueColumns.forEach(col => {
+        const option = document.createElement('option');
+        option.value = col;
+        option.textContent = col;
+        columnSelect.appendChild(option);
+      });
+    }
+    
+    // Add all columns to filter selector (including timestamp)
+    if (state.timestampColumn) {
+      const tsOption = document.createElement('option');
+      tsOption.value = 'timestamp';
+      tsOption.textContent = state.timestampColumn + ' (timestamp)';
+      filterColumn.appendChild(tsOption);
+    }
+    
+    state.valueColumns.forEach(col => {
+      const option = document.createElement('option');
+      option.value = col;
+      option.textContent = col;
+      filterColumn.appendChild(option);
+    });
+  }
+
+  function loadData(parsed) {
+    state.data = parsed.data;
+    state.timestampColumn = parsed.timestampColumn;
+    state.valueColumns = parsed.valueColumns;
+    state.currentTimeIndex = 0;
+    state.isPlaying = false;
+
+    updateColumnSelect();
+    updateDataStatus();
+    updateTimeControls();
+    updateStatus('Data loaded successfully');
+  }
+
+  function updateDataStatus() {
+    if (!state.data) {
+      dataStatus.textContent = 'No data loaded';
+      dataStatus.className = 'pill';
+      return;
+    }
+
+    const count = state.data.length;
+    const start = state.data[0].timestamp.toISOString().slice(0, 19);
+    const end = state.data[count - 1].timestamp.toISOString().slice(0, 19);
+
+    dataStatus.textContent = `${count} rows - ${start} to ${end}`;
+    dataStatus.className = 'pill';
+  }
+
+  function updateTimeControls() {
+    if (!state.data) {
+      timeSlider.disabled = true;
+      timeSlider.max = 100;
+      timeSlider.value = 0;
+      timeDisplay.textContent = '--:--';
+      return;
+    }
+
+    const maxIndex = Math.max(0, state.data.length - 1);
+    timeSlider.max = maxIndex;
+    timeSlider.value = state.currentTimeIndex;
+    timeSlider.disabled = false;
+
+    const currentTime = state.data[state.currentTimeIndex]?.timestamp;
+    if (currentTime) {
+      timeDisplay.textContent = currentTime.toISOString().slice(0, 19);
+    }
+  }
+
+function getWindowData(currentIndex) {
+    if (!state.data || !columnSelect.value) return [];
+
+    const windowMinutes = parseInt(windowSize.value) || 60;
+    const currentTime = state.data[currentIndex].timestamp;
+    // Calculate the cutoff time
+    const windowStart = new Date(currentTime.getTime() - windowMinutes * 60 * 1000);
+
+    const windowData = [];
+    
+    // LOOP CHANGE: Iterate backwards from current index. 
+    // We stop effectively only when we hit the time limit (or index 0).
+    for (let i = currentIndex; i >= 0; i--) {
+      const row = state.data[i];
+
+      // OPTIMIZATION: Since data is sorted by time, we can strictly break 
+      // the loop once we find a row older than our window start.
+      if (row.timestamp < windowStart) break;
+
+      // Apply filter if configured
+      if (filterColumn.value && filterValue.value.trim()) {
+        const filterCol = filterColumn.value;
+        const filterVal = filterValue.value.trim();
+        let rowValue;
+        
+        if (filterCol === 'timestamp') {
+          rowValue = row.timestamp.toISOString();
+        } else {
+          rowValue = (row[filterCol] ?? '').toString();
+        }
+        
+        const matches = filterPredicate.value === 'equals' 
+          ? rowValue === filterVal
+          : rowValue.toLowerCase().includes(filterVal.toLowerCase());
+          
+        if (!matches) continue;
+      }
+      
+      const val = row[columnSelect.value];
+      if (Number.isFinite(val)) {
+        windowData.push(val);
+      }
+    }
+
+    return windowData;
+  }
+
+function drawHistogram() {
+    if (!state.data || !columnSelect.value) {
+      Plotly.react('plot', [], {
+        paper_bgcolor: 'rgba(0,0,0,0)',
+        plot_bgcolor: 'rgba(0,0,0,0)',
+        font: { color: '#e8eefc' }
+      });
+      return;
+    }
+
+    const windowData = getWindowData(state.currentTimeIndex);
+    
+    // --- NEW: Calculate Time Window for Header ---
+    const endTime = state.data[state.currentTimeIndex].timestamp;
+    const wMinutes = parseInt(windowSize.value) || 60;
+    const startTime = new Date(endTime.getTime() - wMinutes * 60 * 1000);
+    
+    // Helper to format date: "2024-01-01 12:00:00"
+    const fmt = (d) => d.toISOString().slice(0, 19).replace('T', ' ');
+    // ---------------------------------------------
+
+    if (windowData.length === 0) {
+      // Still show empty plot with correct title context
+      const layout = {
+        title: {
+            text: `Distribution of ${columnSelect.value}<br><span style="font-size:12px;color:#9bb0db">${fmt(startTime)} — ${fmt(endTime)} (n=0)</span>`,
+            font: { color: '#e8eefc' }
+        },
+        paper_bgcolor: 'rgba(0,0,0,0)',
+        plot_bgcolor: 'rgba(0,0,0,0)',
+        font: { color: '#e8eefc' },
+        xaxis: { showgrid: false, zeroline: false, showticklabels: false },
+        yaxis: { showgrid: false, zeroline: false, showticklabels: false }
+      };
+      Plotly.react('plot', [], layout);
+      updateStatus('No data in current window');
+      return;
+    }
+
+    const binCountVal = parseInt(binCount.value) || 20;
+    const min = Math.min(...windowData);
+    const max = Math.max(...windowData);
+    // Handle case where min == max (single value) to avoid Infinity binSize
+    const binSize = min === max ? 1 : (max - min) / binCountVal;
+
+    const bins = [];
+    const counts = [];
+    
+    // If min === max, we just create one bin
+    const loops = min === max ? 1 : binCountVal;
+
+    for (let i = 0; i < loops; i++) {
+      const binStart = min + i * binSize;
+      const binEnd = min + (i + 1) * binSize;
+      // Use < for all but the last bin, which includes the max value
+      const count = windowData.filter(v => 
+        i === loops - 1 ? (v >= binStart && v <= binEnd) : (v >= binStart && v < binEnd)
+      ).length;
+      
+      bins.push(min === max ? `${min}` : `${binStart.toFixed(2)} - ${binEnd.toFixed(2)}`);
+      counts.push(count);
+    }
+
+    const trace = {
+      type: 'bar',
+      x: bins,
+      y: counts,
+      marker: {
+        color: 'rgba(122,162,255,0.8)',
+        line: { color: 'rgba(122,162,255,1)', width: 1 }
+      },
+      hovertemplate: 'Range: %{x}<br>Count: %{y}<extra></extra>'
+    };
+
+    const layout = {
+      title: {
+        // --- NEW: HTML formatting for title ---
+        text: `Distribution of ${columnSelect.value}<br><span style="font-size:12px;color:#9bb0db">${fmt(startTime)} — ${fmt(endTime)} (n=${windowData.length})</span>`,
+        font: { color: '#e8eefc' }
+      },
+      xaxis: {
+        title: 'Value Range',
+        automargin: true,
+        gridcolor: 'rgba(255,255,255,0.1)',
+        linecolor: 'rgba(255,255,255,0.2)',
+        tickcolor: 'rgba(255,255,255,0.2)',
+        tickangle: -45
+      },
+      yaxis: {
+        title: 'Count',
+        automargin: true,
+        gridcolor: 'rgba(255,255,255,0.1)',
+        linecolor: 'rgba(255,255,255,0.2)',
+        tickcolor: 'rgba(255,255,255,0.2)'
+      },
+      margin: { l: 50, r: 20, t: 60, b: 100 }, // Increased top margin slightly
+      paper_bgcolor: 'rgba(0,0,0,0)',
+      plot_bgcolor: 'rgba(0,0,0,0)',
+      font: { color: '#e8eefc' }
+    };
+
+    const config = {
+      responsive: true,
+      displaylogo: false,
+      modeBarButtonsToRemove: ['select2d','lasso2d']
+    };
+
+    Plotly.react('plot', [trace], layout, config);
+    updateStatus(`Showing ${windowData.length} points from current window`);
+  }
+
+  function animate() {
+    if (!state.isPlaying) return;
+
+    const stepMinutes = parseInt(stepSize.value) || 5;
+    const stepMs = stepMinutes * 60 * 1000;
+
+    let nextIndex = state.currentTimeIndex;
+    const currentTime = state.data[state.currentTimeIndex].timestamp;
+
+    // Find next index based on time step
+    for (let i = state.currentTimeIndex + 1; i < state.data.length; i++) {
+      if (state.data[i].timestamp.getTime() >= currentTime.getTime() + stepMs) {
+        nextIndex = i;
+        break;
+      }
+    }
+
+    if (nextIndex >= state.data.length - 1) {
+      // Reached end, stop animation
+      state.isPlaying = false;
+      updatePlayPauseButtons();
+      updateStatus('Animation completed');
+      return;
+    }
+
+    state.currentTimeIndex = nextIndex;
+    updateTimeControls();
+    drawHistogram();
+
+    const speedVal = parseInt(speed.value) || 500;
+    state.animationId = setTimeout(animate, speedVal);
+  }
+
+  function startAnimation() {
+    if (state.isPlaying) return;
+    state.isPlaying = true;
+    updatePlayPauseButtons();
+    updateStatus('Animation playing...');
+    animate();
+  }
+
+  function pauseAnimation() {
+    state.isPlaying = false;
+    if (state.animationId) {
+      clearTimeout(state.animationId);
+      state.animationId = null;
+    }
+    updatePlayPauseButtons();
+    updateStatus('Animation paused');
+  }
+
+  function rewindAnimation() {
+    pauseAnimation();
+    state.currentTimeIndex = 0;
+    updateTimeControls();
+    drawHistogram();
+    updateStatus('Rewound to start');
+  }
+
+  function updatePlayPauseButtons() {
+    playBtn.disabled = state.isPlaying;
+    pauseBtn.disabled = !state.isPlaying;
+  }
+
+  async function parseFile(file) {
+    return new Promise((resolve, reject) => {
+      Papa.parse(file, {
+        skipEmptyLines: true,
+        dynamicTyping: false,
+        complete: (res) => resolve(res.data),
+        error: (err) => reject(err)
+      });
+    });
+  }
+
+  async function parseClipboardText(text) {
+    return new Promise((resolve, reject) => {
+      Papa.parse(text, {
+        skipEmptyLines: true,
+        dynamicTyping: false,
+        complete: (res) => resolve(res.data),
+        error: (err) => reject(err)
+      });
+    });
+  }
+
+  async function addData(rawData) {
+    try {
+      const parsed = parseData(rawData);
+      loadData(parsed);
+      drawHistogram();
+    } catch (e) {
+      updateStatus(`Error: ${e.message}`);
+      console.error(e);
+    }
+  }
+
+  // Event listeners
+  pickBtn.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      try {
+        const raw = await parseFile(file);
+        await addData(raw);
+      } catch (e) {
+        updateStatus(`Error parsing file: ${e.message}`);
+      }
+    }
+  });
+
+  pasteBtn.addEventListener('click', async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      const raw = await parseClipboardText(text);
+      await addData(raw);
+    } catch (e) {
+      updateStatus(`Error reading clipboard: ${e.message}`);
+    }
+  });
+
+  ['dragenter','dragover'].forEach(ev => {
+    dropZone.addEventListener(ev, (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dropZone.classList.add('dragover');
+    });
+  });
+  ['dragleave','drop'].forEach(ev => {
+    dropZone.addEventListener(ev, (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dropZone.classList.remove('dragover');
+    });
+  });
+  dropZone.addEventListener('drop', async (e) => {
+    const dt = e.dataTransfer;
+    if (dt && dt.files && dt.files[0]) {
+      const file = dt.files[0];
+      try {
+        const raw = await parseFile(file);
+        await addData(raw);
+      } catch (e) {
+        updateStatus(`Error parsing dropped file: ${e.message}`);
+      }
+    }
+  });
+
+  clearBtn.addEventListener('click', () => {
+    state.data = null;
+    state.columns = [];
+    state.currentTimeIndex = 0;
+    state.isPlaying = false;
+    if (state.animationId) {
+      clearTimeout(state.animationId);
+      state.animationId = null;
+    }
+    updateColumnSelect();
+    updateDataStatus();
+    updateTimeControls();
+    updatePlayPauseButtons();
+    filterColumn.value = '';
+    filterValue.value = '';
+    drawHistogram();
+    updateStatus('Data cleared');
+  });
+
+  columnSelect.addEventListener('change', () => {
+    if (columnSelect.value) {
+      drawHistogram();
+    }
+  });
+
+  [binCount, windowSize].forEach(el => {
+    el.addEventListener('change', () => {
+      if (state.data && columnSelect.value) {
+        drawHistogram();
+      }
+    });
+  });
+
+  [filterColumn, filterPredicate, filterValue].forEach(el => {
+    el.addEventListener('change', () => {
+      if (state.data && columnSelect.value) {
+        drawHistogram();
+      }
+    });
+    if (el.type === 'text') {
+      el.addEventListener('input', () => {
+        if (state.data && columnSelect.value) {
+          drawHistogram();
+        }
+      });
+    }
+  });
+
+  playBtn.addEventListener('click', startAnimation);
+  pauseBtn.addEventListener('click', pauseAnimation);
+  rewindBtn.addEventListener('click', rewindAnimation);
+
+  timeSlider.addEventListener('input', (e) => {
+    pauseAnimation();
+    state.currentTimeIndex = parseInt(e.target.value);
+    updateTimeControls();
+    drawHistogram();
+  });
+
+  // Initialize
+  updateDataStatus();
+  updateTimeControls();
+  updatePlayPauseButtons();
+  drawHistogram();
+})();
+</script>
+</body>
+</html></content>
+<parameter name="filePath">/Users/david.pecollet/projects/vibe-tools/rolling_distribution.html
