@@ -18,7 +18,16 @@ Visualize any number of metrics from CSV files by dropping the files on the page
 <img width="1007" height="943" alt="image" src="https://github.com/user-attachments/assets/e12a2499-4dd8-440f-b666-922d9b8b6e8e" />
 
 ### [rolling_distribution](https://pecollet.github.io/vibe-tools/rolling_distribution)
-Create animated rolling distribution histograms from time-series CSV data. Drop a CSV/TSV file with timestamp and numerical columns, configure window size and bin count, then animate the histogram as it moves through time. Features play/pause controls and a time slider for navigation.
+Create animated rolling distribution histograms from time-series CSV data. 
+- Drop a CSV/TSV file with timestamp and numerical columns,
+- select the numerical value whose distribution is going to be displayed
+- configure the rolling window size and histogram bin count,
+- optionally filter the data and choose a grouping coluymn
+- then animate the histogram as the rolling window moves over time. Features play/pause controls and a time slider for navigation.
+
+https://github.com/user-attachments/assets/a7e7345f-db90-48d0-8bc8-b5c4fe9e1a6d
+
+
 
 ### [config_viewer](https://pecollet.github.io/vibe-tools/config_viewer)
 Drop a config file and view the config settings in a searchable/sortable table, without the clutter of comments.
