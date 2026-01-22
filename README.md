@@ -4,6 +4,7 @@ A repository of small tools built using genAI
 ## Tool Catalog
 
 - [plot_csv_metrics](https://pecollet.github.io/vibe-tools/plot_csv_metrics)
+- [rolling_distribution](https://pecollet.github.io/vibe-tools/rolling_distribution)
 - [config_viewer](https://pecollet.github.io/vibe-tools/config_viewer)
 - [query_log_timeline](https://pecollet.github.io/vibe-tools/query_log_timeline)
 - [query_log_swimlanes](https://pecollet.github.io/vibe-tools/query_log_swimlanes)
@@ -15,6 +16,9 @@ A repository of small tools built using genAI
 ### [plot_csv_metrics](https://pecollet.github.io/vibe-tools/plot_csv_metrics)
 Visualize any number of metrics from CSV files by dropping the files on the page.
 <img width="1007" height="943" alt="image" src="https://github.com/user-attachments/assets/e12a2499-4dd8-440f-b666-922d9b8b6e8e" />
+
+### [rolling_distribution](https://pecollet.github.io/vibe-tools/rolling_distribution)
+Create animated rolling distribution histograms from time-series CSV data. Drop a CSV/TSV file with timestamp and numerical columns, configure window size and bin count, then animate the histogram as it moves through time. Features play/pause controls and a time slider for navigation.
 
 ### [config_viewer](https://pecollet.github.io/vibe-tools/config_viewer)
 Drop a config file and view the config settings in a searchable/sortable table, without the clutter of comments.
