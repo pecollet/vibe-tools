@@ -136,8 +136,19 @@
               </select>
             </div>
           </div>
-
+          
           <div style="height:16px"></div>
+          <div style="font-size:14px;font-weight:600;color:var(--text);margin-bottom:8px;">Animation</div>
+          <div class="form-row">
+            <div class="form-group">
+                <label for="stepSize">Step Size (s)</label>
+                <input id="stepSize" type="number" min="1" max="3600" value="60" />
+            </div>
+            <div class="form-group">
+                <label for="speed">Speed (ms)</label>
+                <input id="speed" type="number" min="10" max="2000" value="500" />
+            </div>
+          </div>
 
           <div style="height:16px"></div>
 
@@ -612,12 +623,12 @@ function drawHistogram() {
     Plotly.react('plot', traces, layout, config);
     updateStatus(`Showing ${windowData.length} points from current window`);
   }
-  
+
   function animate() {
     if (!state.isPlaying) return;
 
-    const stepMinutes = parseInt(stepSize.value) || 5;
-    const stepMs = stepMinutes * 60 * 1000;
+    const stepSeconds = parseInt(stepSize.value) || 60;
+    const stepMs = stepSeconds * 1000;
 
     let nextIndex = state.currentTimeIndex;
     const currentTime = state.data[state.currentTimeIndex].timestamp;
