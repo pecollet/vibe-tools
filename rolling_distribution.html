@@ -178,7 +178,8 @@
     isPlaying: false,
     animationId: null,
     timestampColumn: null,
-    valueColumns: []
+    valueColumns: [],
+    categoryColumns: []
   };
 
   const $ = (id) => document.getElementById(id);
@@ -230,7 +231,7 @@
     return Number.isFinite(n) ? n : NaN;
   }
 
-  function parseData(rawData) {
+function parseData(rawData) {
     if (!rawData || rawData.length < 2) {
       throw new Error('Data must have at least header and one data row');
     }
@@ -238,21 +239,19 @@
     const headers = rawData[0].map(h => (h ?? '').toString().trim());
     const dataRows = rawData.slice(1);
 
-    // Assume first column is timestamp
     const timestampCol = headers[0];
-    const valueCols = headers.slice(1).filter(h => h);
-
-    if (valueCols.length === 0) {
-      throw new Error('No numerical value columns found');
-    }
-
+    
+    // 1. Parse rows, preserving strings for non-numeric data
     const parsed = dataRows.map(row => {
       const obj = {};
       headers.forEach((header, idx) => {
         if (idx === 0) {
           obj.timestamp = coerceTimestamp(row[idx]);
         } else {
-          obj[header] = toNumber(row[idx]);
+          // Try to convert to number; if NaN, keep as string
+          const val = row[idx];
+          const num = toNumber(val);
+          obj[header] = Number.isNaN(num) ? (val ?? '').toString() : num;
         }
       });
       return obj;
@@ -262,17 +261,48 @@
       throw new Error('No valid timestamped rows found');
     }
 
+    // 2. Classify Columns (Numerical vs Categorical)
+    const valueCols = [];
+    const categoryCols = [];
+    
+    // Check up to 50 rows to determine column type
+    const sampleLimit = Math.min(parsed.length, 50);
+    
+    headers.slice(1).forEach(h => {
+        if (!h) return;
+        let numCount = 0;
+        let strCount = 0;
+        
+        for(let i = 0; i < sampleLimit; i++) {
+            const v = parsed[i][h];
+            if (typeof v === 'number') numCount++;
+            else if (typeof v === 'string' && v.trim() !== '') strCount++;
+        }
+        
+        // If mostly numbers, it's a Value column. Otherwise, it's a Group column.
+        if (numCount >= strCount) valueCols.push(h);
+        else categoryCols.push(h);
+    });
+
+    if (valueCols.length === 0) {
+      throw new Error('No numerical value columns found');
+    }
+
     return {
       data: parsed,
       timestampColumn: timestampCol,
-      valueColumns: valueCols
+      valueColumns: valueCols,
+      categoryColumns: categoryCols // New property
     };
   }
 
-  function updateColumnSelect() {
+function updateColumnSelect() {
     columnSelect.innerHTML = '<option value="">Select column...</option>';
     filterColumn.innerHTML = '<option value="">No filter</option>';
+    const groupByColumn = $('groupByColumn'); // Get the element
+    groupByColumn.innerHTML = '<option value="">No grouping</option>'; // Reset
     
+    // Populate Value Columns
     if (state.valueColumns.length > 0) {
       state.valueColumns.forEach(col => {
         const option = document.createElement('option');
@@ -282,7 +312,18 @@
       });
     }
     
-    // Add all columns to filter selector (including timestamp)
+    // Populate Group By Columns (Categorical)
+    if (state.categoryColumns.length > 0) {
+      state.categoryColumns.forEach(col => {
+        const option = document.createElement('option');
+        option.value = col;
+        option.textContent = col;
+        groupByColumn.appendChild(option);
+      });
+    }
+
+    // Populate Filters (All columns)
+    const allCols = [...state.valueColumns, ...state.categoryColumns];
     if (state.timestampColumn) {
       const tsOption = document.createElement('option');
       tsOption.value = 'timestamp';
@@ -290,7 +331,7 @@
       filterColumn.appendChild(tsOption);
     }
     
-    state.valueColumns.forEach(col => {
+    allCols.forEach(col => {
       const option = document.createElement('option');
       option.value = col;
       option.textContent = col;
@@ -298,10 +339,11 @@
     });
   }
 
-  function loadData(parsed) {
+function loadData(parsed) {
     state.data = parsed.data;
     state.timestampColumn = parsed.timestampColumn;
     state.valueColumns = parsed.valueColumns;
+    state.categoryColumns = parsed.categoryColumns; // Store categories
     state.currentTimeIndex = 0;
     state.isPlaying = false;
 
@@ -349,44 +391,44 @@
 function getWindowData(currentIndex) {
     if (!state.data || !columnSelect.value) return [];
 
-    const windowMinutes = parseInt(windowSize.value) || 60;
+    const windowMinutes = parseInt(windowSize.value) || 1; // Default 1 min
     const currentTime = state.data[currentIndex].timestamp;
-    // Calculate the cutoff time
     const windowStart = new Date(currentTime.getTime() - windowMinutes * 60 * 1000);
+    const groupCol = $('groupByColumn').value; // Check if grouping is active
 
     const windowData = [];
     
-    // LOOP CHANGE: Iterate backwards from current index. 
-    // We stop effectively only when we hit the time limit (or index 0).
+    // Iterate backwards
     for (let i = currentIndex; i >= 0; i--) {
       const row = state.data[i];
-
-      // OPTIMIZATION: Since data is sorted by time, we can strictly break 
-      // the loop once we find a row older than our window start.
       if (row.timestamp < windowStart) break;
 
-      // Apply filter if configured
+      // -- Filter Logic (Unchanged) --
       if (filterColumn.value && filterValue.value.trim()) {
         const filterCol = filterColumn.value;
         const filterVal = filterValue.value.trim();
         let rowValue;
-        
         if (filterCol === 'timestamp') {
           rowValue = row.timestamp.toISOString();
         } else {
           rowValue = (row[filterCol] ?? '').toString();
         }
-        
         const matches = filterPredicate.value === 'equals' 
           ? rowValue === filterVal
           : rowValue.toLowerCase().includes(filterVal.toLowerCase());
-          
         if (!matches) continue;
       }
-      
+      // -------------------------------
+
       const val = row[columnSelect.value];
-      if (Number.isFinite(val)) {
-        windowData.push(val);
+      
+      // Check if val is a valid number
+      if (typeof val === 'number' && Number.isFinite(val)) {
+        // Return object with value AND group
+        windowData.push({
+          value: val,
+          group: groupCol ? (row[groupCol] ?? 'Unknown') : null
+        });
       }
     }
 
@@ -405,17 +447,13 @@ function drawHistogram() {
 
     const windowData = getWindowData(state.currentTimeIndex);
     
-    // --- NEW: Calculate Time Window for Header ---
+    // Time Header Logic
     const endTime = state.data[state.currentTimeIndex].timestamp;
-    const wMinutes = parseInt(windowSize.value) || 60;
+    const wMinutes = parseInt(windowSize.value) || 1;
     const startTime = new Date(endTime.getTime() - wMinutes * 60 * 1000);
-    
-    // Helper to format date: "2024-01-01 12:00:00"
     const fmt = (d) => d.toISOString().slice(0, 19).replace('T', ' ');
-    // ---------------------------------------------
 
     if (windowData.length === 0) {
-      // Still show empty plot with correct title context
       const layout = {
         title: {
             text: `Distribution of ${columnSelect.value}<br><span style="font-size:12px;color:#9bb0db">${fmt(startTime)} — ${fmt(endTime)} (n=0)</span>`,
@@ -432,47 +470,63 @@ function drawHistogram() {
       return;
     }
 
+    // --- Bins Calculation (Global for the window) ---
     const binCountVal = parseInt(binCount.value) || 20;
-    const min = Math.min(...windowData);
-    const max = Math.max(...windowData);
-    // Handle case where min == max (single value) to avoid Infinity binSize
+    const allValues = windowData.map(d => d.value);
+    const min = Math.min(...allValues);
+    const max = Math.max(...allValues);
     const binSize = min === max ? 1 : (max - min) / binCountVal;
-
-    const bins = [];
-    const counts = [];
-    
-    // If min === max, we just create one bin
     const loops = min === max ? 1 : binCountVal;
 
+    // Generate Bin Labels/Ranges
+    const binRanges = [];
     for (let i = 0; i < loops; i++) {
-      const binStart = min + i * binSize;
-      const binEnd = min + (i + 1) * binSize;
-      // Use < for all but the last bin, which includes the max value
-      const count = windowData.filter(v => 
-        i === loops - 1 ? (v >= binStart && v <= binEnd) : (v >= binStart && v < binEnd)
-      ).length;
-      
-      bins.push(min === max ? `${min}` : `${binStart.toFixed(2)} - ${binEnd.toFixed(2)}`);
-      counts.push(count);
+        const start = min + i * binSize;
+        const end = min + (i + 1) * binSize;
+        binRanges.push({ start, end, label: min === max ? `${min}` : `${start.toFixed(2)} - ${end.toFixed(2)}` });
     }
 
-    const trace = {
-      type: 'bar',
-      x: bins,
-      y: counts,
-      marker: {
-        color: 'rgba(122,162,255,0.8)',
-        line: { color: 'rgba(122,162,255,1)', width: 1 }
-      },
-      hovertemplate: 'Range: %{x}<br>Count: %{y}<extra></extra>'
-    };
+    // --- Grouping Logic ---
+    const groupByColumn = $('groupByColumn');
+    const isGrouping = groupByColumn && groupByColumn.value !== "";
+    
+    // Group the data
+    const groups = {};
+    if (isGrouping) {
+        windowData.forEach(d => {
+            const g = d.group;
+            if (!groups[g]) groups[g] = [];
+            groups[g].push(d.value);
+        });
+    } else {
+        groups['All'] = windowData.map(d => d.value);
+    }
+
+    // Create Traces
+    const traces = Object.keys(groups).sort().map(groupName => {
+        const values = groups[groupName];
+        const counts = binRanges.map((bin, i) => {
+            // Count values in this bin for this group
+            return values.filter(v => 
+                i === loops - 1 ? (v >= bin.start && v <= bin.end) : (v >= bin.start && v < bin.end)
+            ).length;
+        });
+
+        return {
+            type: 'bar',
+            name: groupName,
+            x: binRanges.map(b => b.label),
+            y: counts,
+            hovertemplate: `${isGrouping ? 'Group: ' + groupName + '<br>' : ''}Range: %{x}<br>Count: %{y}<extra></extra>`
+        };
+    });
 
     const layout = {
       title: {
-        // --- NEW: HTML formatting for title ---
         text: `Distribution of ${columnSelect.value}<br><span style="font-size:12px;color:#9bb0db">${fmt(startTime)} — ${fmt(endTime)} (n=${windowData.length})</span>`,
         font: { color: '#e8eefc' }
       },
+      barmode: isGrouping ? 'stack' : 'group', // Enable Stacking
       xaxis: {
         title: 'Value Range',
         automargin: true,
@@ -488,7 +542,12 @@ function drawHistogram() {
         linecolor: 'rgba(255,255,255,0.2)',
         tickcolor: 'rgba(255,255,255,0.2)'
       },
-      margin: { l: 50, r: 20, t: 60, b: 100 }, // Increased top margin slightly
+      legend: {
+        font: { color: '#e8eefc' },
+        orientation: 'h',
+        y: -0.2
+      },
+      margin: { l: 50, r: 20, t: 60, b: 100 },
       paper_bgcolor: 'rgba(0,0,0,0)',
       plot_bgcolor: 'rgba(0,0,0,0)',
       font: { color: '#e8eefc' }
@@ -500,7 +559,7 @@ function drawHistogram() {
       modeBarButtonsToRemove: ['select2d','lasso2d']
     };
 
-    Plotly.react('plot', [trace], layout, config);
+    Plotly.react('plot', traces, layout, config);
     updateStatus(`Showing ${windowData.length} points from current window`);
   }
 
@@ -703,6 +762,13 @@ function drawHistogram() {
   playBtn.addEventListener('click', startAnimation);
   pauseBtn.addEventListener('click', pauseAnimation);
   rewindBtn.addEventListener('click', rewindAnimation);
+
+  const groupByColumn = $('groupByColumn');
+  groupByColumn.addEventListener('change', () => {
+    if (state.data && columnSelect.value) {
+      drawHistogram();
+    }
+  });
 
   timeSlider.addEventListener('input', (e) => {
     pauseAnimation();
