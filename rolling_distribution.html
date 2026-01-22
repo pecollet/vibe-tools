@@ -453,6 +453,18 @@ function getWindowData(currentIndex) {
     return windowData;
   }
 
+  function calculatePercentile(sortedValues, q) {
+    if (sortedValues.length === 0) return 0;
+    const pos = (sortedValues.length - 1) * q;
+    const base = Math.floor(pos);
+    const rest = pos - base;
+    if (sortedValues[base + 1] !== undefined) {
+      return sortedValues[base] + rest * (sortedValues[base + 1] - sortedValues[base]);
+    } else {
+      return sortedValues[base];
+    }
+  }
+
   function generateColorMap(colName) {
     if (!state.data) return {};
     
@@ -492,21 +504,20 @@ function drawHistogram() {
       return;
     }
 
-    // --- NEW: Handle Global Color Mapping ---
+    // Check grouping state
     const groupByColumn = $('groupByColumn');
     const groupColName = groupByColumn ? groupByColumn.value : "";
     const isGrouping = groupColName !== "";
 
-    // If the group column changed, regenerate the global color map
+    // Regenerate colors if group column changed
     if (isGrouping && state.currentGroupCol !== groupColName) {
         state.groupColorMap = generateColorMap(groupColName);
         state.currentGroupCol = groupColName;
     }
-    // ----------------------------------------
 
     const windowData = getWindowData(state.currentTimeIndex);
     
-    // Time Header Logic
+    // Time Header
     const endTime = state.data[state.currentTimeIndex].timestamp;
     const wMinutes = parseInt(windowSize.value) || 1;
     const startTime = new Date(endTime.getTime() - wMinutes * 60 * 1000);
@@ -529,14 +540,16 @@ function drawHistogram() {
       return;
     }
 
+    // --- Binning Logic ---
     const binCountVal = parseInt(binCount.value) || 20;
-    const allValues = windowData.map(d => d.value);
-    const min = Math.min(...allValues);
-    const max = Math.max(...allValues);
+    // Extract raw numerical values for stats and binning
+    const allValues = windowData.map(d => d.value).sort((a, b) => a - b);
+    
+    const min = allValues[0];
+    const max = allValues[allValues.length - 1];
     const binSize = min === max ? 1 : (max - min) / binCountVal;
     const loops = min === max ? 1 : binCountVal;
 
-    // Generate Bin Ranges
     const binRanges = [];
     for (let i = 0; i < loops; i++) {
         const start = min + i * binSize;
@@ -544,7 +557,7 @@ function drawHistogram() {
         binRanges.push({ start, end, label: min === max ? `${min}` : `${start.toFixed(2)} - ${end.toFixed(2)}` });
     }
 
-    // Group the data locally for this window
+    // --- Grouping Logic ---
     const groups = {};
     if (isGrouping) {
         windowData.forEach(d => {
@@ -553,7 +566,7 @@ function drawHistogram() {
             groups[g].push(d.value);
         });
     } else {
-        groups['All'] = windowData.map(d => d.value);
+        groups['All'] = allValues; // Use already extracted values
     }
 
     // Create Traces
@@ -565,9 +578,7 @@ function drawHistogram() {
             ).length;
         });
 
-        // --- NEW: Apply Fixed Color ---
         const traceColor = isGrouping ? state.groupColorMap[groupName] : 'rgba(122,162,255,0.8)';
-        // ------------------------------
 
         return {
             type: 'bar',
@@ -576,11 +587,56 @@ function drawHistogram() {
             y: counts,
             marker: {
                 color: traceColor,
-                line: { color: traceColor, width: 1 } // Match border to fill
+                line: { color: traceColor, width: 1 }
             },
             hovertemplate: `${isGrouping ? 'Group: ' + groupName + '<br>' : ''}Range: %{x}<br>Count: %{y}<extra></extra>`
         };
     });
+
+    // --- NEW: Calculate Percentiles & Create Shapes ---
+    const p50 = calculatePercentile(allValues, 0.50);
+    const p75 = calculatePercentile(allValues, 0.75);
+    const p90 = calculatePercentile(allValues, 0.90);
+    const p99 = calculatePercentile(allValues, 0.99);
+
+    const percentileConfig = [
+        { val: p50, label: 'p50', color: '#ffd700' }, // Gold
+        { val: p75, label: 'p75', color: '#ff9900' }, // Orange
+        { val: p90, label: 'p90', color: '#ff6600' }, // Dark Orange
+        { val: p99, label: 'p99', color: '#ff3300' }  // Red
+    ];
+
+    // Create vertical dotted lines
+    const shapes = percentileConfig.map(p => ({
+        type: 'line',
+        x0: p.val,
+        x1: p.val,
+        y0: 0,
+        y1: 1,
+        xref: 'x', // Map to x-axis values (the data)
+        yref: 'paper', // Map to full height of plot area
+        line: {
+            color: p.color,
+            width: 2,
+            dash: 'dot'
+        }
+    }));
+
+    // Create labels at the top of the lines
+    const annotations = percentileConfig.map(p => ({
+        x: p.val,
+        y: 1,
+        xref: 'x',
+        yref: 'paper',
+        text: p.label,
+        showarrow: false,
+        xanchor: 'left',
+        yanchor: 'bottom',
+        font: { color: p.color, size: 10 },
+        textangle: -90, // Vertical text so they don't overlap easily
+        yshift: 5
+    }));
+    // --------------------------------------------------
 
     const layout = {
       title: {
@@ -591,10 +647,41 @@ function drawHistogram() {
       xaxis: {
         title: 'Value Range',
         automargin: true,
+        // Ensure the x-axis handles the raw numbers correctly for the lines to map
+        // Note: Bar charts usually use categories (strings) for X. 
+        // To mix Bars (categorical X) and Lines (numerical X), we must be careful.
+        // However, Plotly is smart. If we use strings for Bar X, we can't easily map numerical lines.
+        // TRICK: We will not change X axis type, but we must map the Line X value to the Bin it falls into?
+        // Actually, it's cleaner to just overlay lines if X is linear. 
+        // But our Histogram Bins are strings "10-20".
+        // **FIX**: We need to map the percentile value to the approximate X-coordinate (bin index).
+      },
+      // Since our Bar chart uses CATEGORICAL strings as X-axis ("1.00 - 2.00"), 
+      // we cannot simply draw a line at x=1.5. 
+      // We need to switch the chart to use a numerical X-axis histogram or approximate the position.
+      // BUT, changing to 'histogram' type breaks our custom binning logic.
+      //
+      // BETTER APPROACH for this specific codebase: 
+      // Keep X-axis as strings, but don't draw lines on the X-axis. 
+      // Draw lines on the *bins*? No, that's inaccurate.
+      // 
+      // CORRECT FIX: We must use a linear X-axis for the bars.
+      // We will provide x as the *midpoint* of the bin, and set `width` of bars.
+      margin: { l: 50, r: 20, t: 80, b: 100 }, // Increase top margin for labels
+      paper_bgcolor: 'rgba(0,0,0,0)',
+      plot_bgcolor: 'rgba(0,0,0,0)',
+      font: { color: '#e8eefc' },
+      shapes: shapes,           // Add the lines
+      annotations: annotations, // Add the labels
+      
+      // CRITICAL: We need the X-axis to be linear for the lines to appear at the correct mathematical position
+      xaxis: {
+        title: 'Value',
+        automargin: true,
+        tickangle: -45,
         gridcolor: 'rgba(255,255,255,0.1)',
         linecolor: 'rgba(255,255,255,0.2)',
-        tickcolor: 'rgba(255,255,255,0.2)',
-        tickangle: -45
+        tickcolor: 'rgba(255,255,255,0.2)'
       },
       yaxis: {
         title: 'Count',
@@ -607,12 +694,19 @@ function drawHistogram() {
         font: { color: '#e8eefc' },
         orientation: 'h',
         y: -0.2
-      },
-      margin: { l: 50, r: 20, t: 60, b: 100 },
-      paper_bgcolor: 'rgba(0,0,0,0)',
-      plot_bgcolor: 'rgba(0,0,0,0)',
-      font: { color: '#e8eefc' }
+      }
     };
+
+    // --- FIX FOR AXIS ALIGNMENT ---
+    // For the percentiles to show up at the correct X position (e.g. 55.4) while using custom bins,
+    // we must position the bars at the numerical centers of the bins.
+    traces.forEach(t => {
+       // Replace the string labels ["10-20", "20-30"] with numerical midpoints [15, 25]
+       // so they share the same numerical axis as the percentile lines.
+       t.x = binRanges.map(b => (b.start + b.end) / 2);
+       // Set the width of the bars so they touch
+       t.width = binRanges.map(b => (b.end - b.start));
+    });
 
     const config = {
       responsive: true,
@@ -623,7 +717,6 @@ function drawHistogram() {
     Plotly.react('plot', traces, layout, config);
     updateStatus(`Showing ${windowData.length} points from current window`);
   }
-
   function animate() {
     if (!state.isPlaying) return;
 
