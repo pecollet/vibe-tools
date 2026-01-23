@@ -14,18 +14,23 @@ A repository of small tools built using genAI
 ## Descriptions
 
 ### [plot_csv_metrics](https://pecollet.github.io/vibe-tools/plot_csv_metrics)
-Visualize any number of metrics from CSV files by dropping the files on the page.
+Visualize any number of metrics from CSV files by dropping the files on the page. 
+- multiple metrics can be displayed on the same chart or on multiple charts
+- supports dropping zipped CSV files (rotated metrics)
 <img width="1007" height="943" alt="image" src="https://github.com/user-attachments/assets/e12a2499-4dd8-440f-b666-922d9b8b6e8e" />
 
 ### [rolling_distribution](https://pecollet.github.io/vibe-tools/rolling_distribution)
 Create animated rolling distribution histograms from time-series CSV data. 
 - Drop a CSV/TSV file with timestamp and numerical columns,
-- select the numerical value whose distribution is going to be displayed
+- select the numerical column whose distribution is going to be displayed
 - configure the rolling window size and histogram bin count,
-- optionally filter the data and choose a grouping coluymn
+- optionally filter the data and choose a grouping column
 - then animate the histogram as the rolling window moves over time. Features play/pause controls and a time slider for navigation.
 
-https://github.com/user-attachments/assets/a7e7345f-db90-48d0-8bc8-b5c4fe9e1a6d
+
+https://github.com/user-attachments/assets/655ae0bd-95de-4830-89ac-817ad2f2f791
+
+
 
 
 
@@ -43,19 +48,21 @@ View Cypher query executions in a swimlane chart
 
 ### [aura_hc_shortcuts](https://pecollet.github.io/vibe-tools/aura_hc_shortcuts)
 Common shortcuts to help go through the steps requied to perform an Aura Health Check :
-- go to the Preset db lookup dashbioard to find your dbid
+- go to the Preset db lookup dashboard to find your dbid
 - go to the SRE portal to generate admin reports
 - go to the GCP bucket to retrieve them
 - find the CPP id
 - go to the Health Check s3 bucket (or the FTP) to upload the admin reports and trigger the Health Check
-<img width="1601" height="374" alt="image" src="https://github.com/user-attachments/assets/fa9d12a8-2709-44e9-a350-9a199237e4a9" />
+- open the slack channel to retrieve your Health Check report
+<img width="1916" height="590" alt="image" src="https://github.com/user-attachments/assets/bc9b146e-4bf6-46d4-b118-c62525cd0030" />
 
 
 ### [hc_most_costly_2_desktop](https://pecollet.github.io/vibe-tools/hc_most_costly_2_desktop)
 Get the list of most costly queries from a Health Check report into Neo4j Browser's (or Aura Console Query's) Saved Cypher section.
 Drop the report zip file, click the Export button and import the generated CSV file into your Saved Cypher with <img width="220" height="20" alt="image" src="https://github.com/user-attachments/assets/e9c0c9ad-e7e8-463c-9771-52f46526b362" />
 
-**New Feature**: Generate synthetic Cypher queries with realistic fake data using Faker.js library. Configure node/relationship properties with templates including:
+**New Feature**: Generate synthetic Cypher queries with realistic fake data using Faker.js library. 
+Configure node/relationship counts & properties with templates including:
 - Realistic names, addresses, emails, phone numbers
 - Company names and catchphrases  
 - Internet URLs and IP addresses
