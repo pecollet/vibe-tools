@@ -48,7 +48,7 @@
         <div class="hd">
           <div>
             <h1>Data Input</h1>
-            <div class="sub">Drop CSV/TSV file or paste from clipboard. First column should be timestamp, others numerical values.</div>
+            <div class="sub">Drop CSV, JSONL, or Log file. Auto-detects timestamps and numerical values.</div>
           </div>
           <div class="row">
             <button class="btn" id="clearBtn" title="Clear data">Clear</button>
@@ -58,16 +58,17 @@
           <div class="drop" id="dropZone">
             <div class="row">
               <button class="btn" id="pickBtn">Choose file…</button>
-              <input id="fileInput" type="file" accept=".csv,.tsv,text/csv,text/tab-separated-values" style="display:none" />
+              <input id="fileInput" type="file" accept=".csv,.tsv,.json,.jsonl,.txt,.log" style="display:none" />
               <button class="btn" id="pasteBtn">Paste from clipboard</button>
               <span class="pill" id="dataStatus">No data loaded</span>
             </div>
             <div class="hint">
-              <div>Expected format:</div>
-              <div class="mono">timestamp,value1,value2,...</div>
-              <div class="mono">2024-01-01T00:00:00Z,123.45,67.89</div>
-              <div class="mono">1735689600000,123.45,67.89</div>
-              <div style="margin-top:8px">Supports CSV and TSV files</div>
+              <div>Supported formats:</div>
+              <ul style="margin:4px 0 8px 16px; padding:0;">
+                <li><strong>CSV/TSV:</strong> First column timestamp, others numerical.</li>
+                <li><strong>JSONL:</strong> Line-separated JSON objects (needs "time" field).</li>
+                <li><strong>Logs:</strong> Neo4j query logs (extracts ms, planning, waiting, bytes, etc).</li>
+              </ul>
             </div>
           </div>
         </div>
@@ -232,6 +233,8 @@
     statusText.textContent = text;
   }
 
+  // --- PARSING HELPERS ---
+
   function coerceTimestamp(value) {
     if (value === null || value === undefined) return null;
     const s = value.toString().trim();
@@ -255,78 +258,172 @@
     return Number.isFinite(n) ? n : NaN;
   }
 
-function parseData(rawData) {
-    if (!rawData || rawData.length < 2) {
-      throw new Error('Data must have at least header and one data row');
-    }
+  // --- NEW PARSERS ---
 
-    const headers = rawData[0].map(h => (h ?? '').toString().trim());
-    const dataRows = rawData.slice(1);
-
-    const timestampCol = headers[0];
+  function parseJsonl(text) {
+    const lines = text.split(/\r?\n/);
+    const parsed = [];
     
-    // 1. Parse rows, preserving strings for non-numeric data
-    const parsed = dataRows.map(row => {
-      const obj = {};
-      headers.forEach((header, idx) => {
-        if (idx === 0) {
-          obj.timestamp = coerceTimestamp(row[idx]);
-        } else {
-          // Try to convert to number; if NaN, keep as string
-          const val = row[idx];
-          const num = toNumber(val);
-          obj[header] = Number.isNaN(num) ? (val ?? '').toString() : num;
+    for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+            const obj = JSON.parse(line);
+            // Flatten top-level structure simply or use as is
+            // We look for specific time fields
+            const timeVal = obj.time || obj.timestamp || obj.date || obj.datetime;
+            const ts = coerceTimestamp(timeVal);
+            
+            if (ts) {
+                obj.timestamp = ts;
+                parsed.push(obj);
+            }
+        } catch (e) {
+            // Skip invalid lines
         }
-      });
-      return obj;
-    }).filter(row => row.timestamp !== null).sort((a, b) => a.timestamp - b.timestamp);
+    }
+    return parsed;
+  }
 
-    if (parsed.length === 0) {
-      throw new Error('No valid timestamped rows found');
+  function parseTextLog(text) {
+    const lines = text.split(/\r?\n/);
+    const parsed = [];
+    
+    // Regex for typical Neo4j query log start: "YYYY-MM-DD HH:mm:ss.SSS+0000 INFO ..."
+    // Matches the timestamp at the very start of the line.
+    const timestampRegex = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{4})/;
+    
+    // Metrics Extractors
+    // "6 ms"
+    const regexTime = /(\d+)\s+ms/; 
+    // "planning: 6"
+    const regexPlanning = /planning:\s*(\d+)/;
+    // "waiting: 0"
+    const regexWaiting = /waiting:\s*(\d+)/;
+    // "0 B" or "Allocated: 500 B" - Looking for the pattern "- X B -" often seen in logs
+    // or just digits followed by B. Let's be reasonably specific based on example " - 0 B -"
+    const regexBytes = /-\s*(\d+)\s+B/; 
+    // "0 page hits"
+    const regexPageHits = /(\d+)\s+page hits/;
+    // "0 page faults"
+    const regexPageFaults = /(\d+)\s+page faults/;
+
+    for (const line of lines) {
+        const match = line.match(timestampRegex);
+        if (match) {
+            const tsStr = match[1];
+            const ts = coerceTimestamp(tsStr);
+            if (!ts) continue;
+
+            const row = { timestamp: ts };
+
+            // Extract Metrics
+            const mTime = line.match(regexTime);
+            if (mTime) row['elapsedTimeMs'] = parseInt(mTime[1]);
+
+            const mPlan = line.match(regexPlanning);
+            if (mPlan) row['planning'] = parseInt(mPlan[1]);
+
+            const mWait = line.match(regexWaiting);
+            if (mWait) row['waiting'] = parseInt(mWait[1]);
+
+            const mBytes = line.match(regexBytes);
+            if (mBytes) row['used bytes'] = parseInt(mBytes[1]);
+
+            const mHits = line.match(regexPageHits);
+            if (mHits) row['page hits'] = parseInt(mHits[1]);
+
+            const mFaults = line.match(regexPageFaults);
+            if (mFaults) row['page faults'] = parseInt(mFaults[1]);
+
+            // Add original line for context if needed, or other fields
+            // row['raw'] = line; 
+
+            parsed.push(row);
+        }
+    }
+    return parsed;
+  }
+
+  function parseData(rawData) {
+    // 1. Determine Input Type
+    let dataObjects = [];
+    let headers = [];
+
+    // Case A: CSV/TSV (Array of Arrays from PapaParse)
+    if (Array.isArray(rawData) && Array.isArray(rawData[0])) {
+        if (rawData.length < 2) throw new Error('CSV must have header and data');
+        headers = rawData[0].map(h => (h ?? '').toString().trim());
+        const rows = rawData.slice(1);
+        
+        dataObjects = rows.map(row => {
+            const obj = {};
+            headers.forEach((h, i) => {
+                if (i === 0) obj.timestamp = coerceTimestamp(row[i]);
+                else {
+                    const val = row[i];
+                    const num = toNumber(val);
+                    obj[h] = Number.isNaN(num) ? (val ?? '').toString() : num;
+                }
+            });
+            return obj;
+        }).filter(r => r.timestamp !== null);
+    } 
+    // Case B: JSONL/Text Logs (Array of Objects)
+    else if (Array.isArray(rawData) && typeof rawData[0] === 'object') {
+        dataObjects = rawData.sort((a,b) => a.timestamp - b.timestamp);
+        if (dataObjects.length === 0) throw new Error('No valid rows parsed');
+        
+        // Infer headers from the first valid object (or merge keys from sample)
+        const sampleKeys = new Set();
+        dataObjects.slice(0, 50).forEach(o => Object.keys(o).forEach(k => sampleKeys.add(k)));
+        headers = Array.from(sampleKeys);
+    } else {
+        throw new Error('Unknown data format');
     }
 
-    // 2. Classify Columns (Numerical vs Categorical)
+    if (dataObjects.length === 0) throw new Error('No valid timestamped rows found');
+
+    // 2. Classify Columns
     const valueCols = [];
     const categoryCols = [];
-    
-    // Check up to 50 rows to determine column type
-    const sampleLimit = Math.min(parsed.length, 50);
-    
-    headers.slice(1).forEach(h => {
-        if (!h) return;
+    const timestampCol = headers.find(h => h.toLowerCase() === 'timestamp' || h.toLowerCase() === 'time') || headers[0];
+
+    const sampleLimit = Math.min(dataObjects.length, 50);
+
+    headers.forEach(h => {
+        if (!h || h === 'timestamp' || h === timestampCol) return;
+        
         let numCount = 0;
         let strCount = 0;
-        
-        for(let i = 0; i < sampleLimit; i++) {
-            const v = parsed[i][h];
+
+        for(let i=0; i<sampleLimit; i++) {
+            const v = dataObjects[i][h];
             if (typeof v === 'number') numCount++;
-            else if (typeof v === 'string' && v.trim() !== '') strCount++;
+            else if (typeof v === 'string') strCount++;
         }
-        
-        // If mostly numbers, it's a Value column. Otherwise, it's a Group column.
-        if (numCount >= strCount) valueCols.push(h);
+
+        if (numCount >= strCount && numCount > 0) valueCols.push(h);
         else categoryCols.push(h);
     });
 
-    if (valueCols.length === 0) {
-      throw new Error('No numerical value columns found');
-    }
+    if (valueCols.length === 0) throw new Error('No numerical columns found');
 
     return {
-      data: parsed,
-      timestampColumn: timestampCol,
-      valueColumns: valueCols,
-      categoryColumns: categoryCols // New property
+        data: dataObjects,
+        timestampColumn: timestampCol,
+        valueColumns: valueCols,
+        categoryColumns: categoryCols
     };
   }
+
+  // --- APP LOGIC ---
 
   function updateColumnSelect() {
     columnSelect.innerHTML = '<option value="">Select column...</option>';
     filterColumn.innerHTML = '<option value="">No filter</option>';
-    const groupByColumn = $('groupByColumn'); // Get the element
-    groupByColumn.innerHTML = '<option value="">No grouping</option>'; // Reset
+    const groupByColumn = $('groupByColumn'); 
+    groupByColumn.innerHTML = '<option value="">No grouping</option>'; 
     
-    // Populate Value Columns
     if (state.valueColumns.length > 0) {
       state.valueColumns.forEach(col => {
         const option = document.createElement('option');
@@ -334,9 +431,10 @@ function parseData(rawData) {
         option.textContent = col;
         columnSelect.appendChild(option);
       });
+      // Auto-select first value column
+      columnSelect.value = state.valueColumns[0];
     }
     
-    // Populate Group By Columns (Categorical)
     if (state.categoryColumns.length > 0) {
       state.categoryColumns.forEach(col => {
         const option = document.createElement('option');
@@ -346,7 +444,6 @@ function parseData(rawData) {
       });
     }
 
-    // Populate Filters (All columns)
     const allCols = [...state.valueColumns, ...state.categoryColumns];
     if (state.timestampColumn) {
       const tsOption = document.createElement('option');
@@ -370,11 +467,8 @@ function parseData(rawData) {
     state.categoryColumns = parsed.categoryColumns;
     state.currentTimeIndex = 0;
     state.isPlaying = false;
-    
-    // --- NEW: Reset Grouping State on Load ---
     state.groupColorMap = {};
     state.currentGroupCol = null;
-    // -----------------------------------------
 
     updateColumnSelect();
     updateDataStatus();
@@ -382,6 +476,7 @@ function parseData(rawData) {
     updateStatus('Data loaded successfully');
 
     drawTimeline();
+    drawHistogram(); // Draw initial frame
   }
 
   function updateDataStatus() {
@@ -390,11 +485,9 @@ function parseData(rawData) {
       dataStatus.className = 'pill';
       return;
     }
-
     const count = state.data.length;
     const start = state.data[0].timestamp.toISOString().slice(0, 19);
     const end = state.data[count - 1].timestamp.toISOString().slice(0, 19);
-
     dataStatus.textContent = `${count} rows - ${start} to ${end}`;
     dataStatus.className = 'pill';
   }
@@ -407,62 +500,46 @@ function parseData(rawData) {
       timeDisplay.textContent = '--:--';
       return;
     }
-
     const maxIndex = Math.max(0, state.data.length - 1);
     timeSlider.max = maxIndex;
     timeSlider.value = state.currentTimeIndex;
     timeSlider.disabled = false;
-
     const currentTime = state.data[state.currentTimeIndex]?.timestamp;
-    if (currentTime) {
-      timeDisplay.textContent = currentTime.toISOString().slice(0, 19);
-    }
+    if (currentTime) timeDisplay.textContent = currentTime.toISOString().slice(0, 19);
   }
 
-function getWindowData(currentIndex) {
+  function getWindowData(currentIndex) {
     if (!state.data || !columnSelect.value) return [];
-
-    const windowMinutes = parseInt(windowSize.value) || 1; // Default 1 min
+    const windowMinutes = parseInt(windowSize.value) || 1;
     const currentTime = state.data[currentIndex].timestamp;
     const windowStart = new Date(currentTime.getTime() - windowMinutes * 60 * 1000);
-    const groupCol = $('groupByColumn').value; // Check if grouping is active
-
+    const groupCol = $('groupByColumn').value;
     const windowData = [];
     
-    // Iterate backwards
     for (let i = currentIndex; i >= 0; i--) {
       const row = state.data[i];
       if (row.timestamp < windowStart) break;
 
-      // -- Filter Logic (Unchanged) --
       if (filterColumn.value && filterValue.value.trim()) {
         const filterCol = filterColumn.value;
         const filterVal = filterValue.value.trim();
         let rowValue;
-        if (filterCol === 'timestamp') {
-          rowValue = row.timestamp.toISOString();
-        } else {
-          rowValue = (row[filterCol] ?? '').toString();
-        }
+        if (filterCol === 'timestamp') rowValue = row.timestamp.toISOString();
+        else rowValue = (row[filterCol] ?? '').toString();
         const matches = filterPredicate.value === 'equals' 
           ? rowValue === filterVal
           : rowValue.toLowerCase().includes(filterVal.toLowerCase());
         if (!matches) continue;
       }
-      // -------------------------------
 
       const val = row[columnSelect.value];
-      
-      // Check if val is a valid number
       if (typeof val === 'number' && Number.isFinite(val)) {
-        // Return object with value AND group
         windowData.push({
           value: val,
           group: groupCol ? (row[groupCol] ?? 'Unknown') : null
         });
       }
     }
-
     return windowData;
   }
 
@@ -471,60 +548,32 @@ function getWindowData(currentIndex) {
     const pos = (sortedValues.length - 1) * q;
     const base = Math.floor(pos);
     const rest = pos - base;
-    if (sortedValues[base + 1] !== undefined) {
-      return sortedValues[base] + rest * (sortedValues[base + 1] - sortedValues[base]);
-    } else {
-      return sortedValues[base];
-    }
+    return (sortedValues[base + 1] !== undefined)
+      ? sortedValues[base] + rest * (sortedValues[base + 1] - sortedValues[base])
+      : sortedValues[base];
   }
 
   function generateColorMap(colName) {
     if (!state.data) return {};
-    
-    // 1. Find all unique values in the entire dataset for this column
     const uniqueValues = new Set();
-    state.data.forEach(row => {
-      // Match the logic used in getWindowData
-      const val = row[colName] ?? 'Unknown';
-      uniqueValues.add(val.toString());
-    });
-    
+    state.data.forEach(row => uniqueValues.add((row[colName] ?? 'Unknown').toString()));
     const sortedGroups = Array.from(uniqueValues).sort();
-    
-    // 2. Standard Plotly color sequence (10 colors)
-    const colors = [
-      '#636efa', '#EF553B', '#00cc96', '#ab63fa', '#FFA15A', 
-      '#19d3f3', '#FF6692', '#B6E880', '#FF97FF', '#FECB52'
-    ];
-    
-    // 3. Map each group to a color
+    const colors = ['#636efa', '#EF553B', '#00cc96', '#ab63fa', '#FFA15A', '#19d3f3', '#FF6692', '#B6E880', '#FF97FF', '#FECB52'];
     const map = {};
-    sortedGroups.forEach((group, i) => {
-      // Cycle through colors if there are more groups than colors
-      map[group] = colors[i % colors.length];
-    });
-    
+    sortedGroups.forEach((group, i) => map[group] = colors[i % colors.length]);
     return map;
   }
 
   function drawTimeline() {
     if (!state.data || state.data.length === 0) {
-      Plotly.react('timelinePlot', [], {
-        paper_bgcolor: 'rgba(0,0,0,0)',
-        plot_bgcolor: 'rgba(0,0,0,0)',
-        xaxis: { showgrid: false, showticklabels: false },
-        yaxis: { showgrid: false, showticklabels: false }
-      });
+      Plotly.react('timelinePlot', [], { paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)', xaxis: { showgrid: false, showticklabels: false }, yaxis: { showgrid: false, showticklabels: false } });
       return;
     }
-
     const totalStart = state.data[0].timestamp.getTime();
     const totalEnd = state.data[state.data.length - 1].timestamp.getTime();
     const totalDuration = totalEnd - totalStart;
-    
     const binCountTarget = 100;
     const binStepMs = totalDuration <= 0 ? 1000 : totalDuration / binCountTarget;
-
     const groupByColumn = $('groupByColumn');
     const groupColName = groupByColumn ? groupByColumn.value : "";
     const isGrouping = groupColName !== "";
@@ -542,126 +591,55 @@ function getWindowData(currentIndex) {
     const allGroups = isGrouping ? Object.keys(state.groupColorMap).sort() : ['All'];
     const sortedBinIndices = Array.from(bins.keys()).sort((a, b) => a - b);
     const xValues = sortedBinIndices.map(i => new Date(totalStart + i * binStepMs + binStepMs/2));
-
     const traces = allGroups.map(groupName => {
         const yValues = sortedBinIndices.map(i => bins.get(i)[groupName] || 0);
         const color = isGrouping ? state.groupColorMap[groupName] : 'rgba(122,162,255,0.5)';
-        
-        return {
-            type: 'bar',
-            name: groupName,
-            x: xValues,
-            y: yValues,
-            marker: { color: color },
-            hoverinfo: 'none' // No hover tooltips
-        };
+        return { type: 'bar', name: groupName, x: xValues, y: yValues, marker: { color: color }, hoverinfo: 'none' };
     });
 
     const layout = {
-        barmode: 'stack',
-        // Minimize margins to align better with the slider above it
-        margin: { l: 0, r: 0, t: 10, b: 0 }, 
-        paper_bgcolor: 'rgba(0,0,0,0)',
-        plot_bgcolor: 'rgba(0,0,0,0)',
-        showlegend: false,
-        xaxis: {
-            type: 'date',
-            range: [totalStart, totalEnd], // Explicitly lock range
-            fixedrange: true, // Disable zoom/pan on axis
-            showgrid: false,
-            showticklabels: false // Hide labels for cleaner "sparkline" look
-        },
-        yaxis: {
-            fixedrange: true, // Disable zoom/pan
-            showgrid: false,
-            showticklabels: false,
-            zeroline: false
-        },
-        hovermode: false, // Global disable hover
-        dragmode: false,  // Global disable drag
-        shapes: [] 
+        barmode: 'stack', margin: { l: 0, r: 0, t: 10, b: 0 }, 
+        paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)', showlegend: false,
+        xaxis: { type: 'date', range: [totalStart, totalEnd], fixedrange: true, showgrid: false, showticklabels: false },
+        yaxis: { fixedrange: true, showgrid: false, showticklabels: false, zeroline: false },
+        hovermode: false, dragmode: false, shapes: [] 
     };
-
-    // 'staticPlot: true' makes it purely illustrative (no interactions)
-    const config = { 
-        displayModeBar: false, 
-        responsive: true, 
-        staticPlot: true 
-    };
-    
-    Plotly.react('timelinePlot', traces, layout, config);
-    
+    Plotly.react('timelinePlot', traces, layout, { displayModeBar: false, responsive: true, staticPlot: true });
     updateTimelineHighlight();
   }
 
   function updateTimelineHighlight() {
     if (!state.data || state.data.length === 0) return;
-
-    // Calculate Window Start/End
     const endTime = state.data[state.currentTimeIndex].timestamp;
     const wMinutes = parseInt(windowSize.value) || 1;
     const startTime = new Date(endTime.getTime() - wMinutes * 60 * 1000);
-
-    // Create the Shape (Rectangle overlay)
-    const windowShape = {
-        type: 'rect',
-        xref: 'x', yref: 'paper',
-        x0: startTime,
-        x1: endTime,
-        y0: 0, y1: 1,
-        fillcolor: '#fff',
-        opacity: 0.15,
-        line: {
-            color: '#fff',
-            width: 1
-        }
-    };
-
-    // Use relayout for performance (doesn't redraw the whole chart data)
+    const windowShape = { type: 'rect', xref: 'x', yref: 'paper', x0: startTime, x1: endTime, y0: 0, y1: 1, fillcolor: '#fff', opacity: 0.15, line: { color: '#fff', width: 1 } };
     Plotly.relayout('timelinePlot', { shapes: [windowShape] });
   }
 
   function drawHistogram() {
     if (!state.data || !columnSelect.value) {
-      Plotly.react('plot', [], {
-        paper_bgcolor: 'rgba(0,0,0,0)',
-        plot_bgcolor: 'rgba(0,0,0,0)',
-        font: { color: '#e8eefc' }
-      });
+      Plotly.react('plot', [], { paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)', font: { color: '#e8eefc' } });
       return;
     }
-
     const lockAxes = $('lockAxes').checked;
-
-    // --- GROUPING & COLOR MAP ---
     const groupByColumn = $('groupByColumn');
     const groupColName = groupByColumn ? groupByColumn.value : "";
     const isGrouping = groupColName !== "";
-
     if (isGrouping && state.currentGroupCol !== groupColName) {
         state.groupColorMap = generateColorMap(groupColName);
         state.currentGroupCol = groupColName;
     }
-
-    // --- DATA RETRIEVAL ---
     const windowData = getWindowData(state.currentTimeIndex);
-    
-    // Time Header
     const endTime = state.data[state.currentTimeIndex].timestamp;
     const wMinutes = parseInt(windowSize.value) || 1;
     const startTime = new Date(endTime.getTime() - wMinutes * 60 * 1000);
     const fmt = (d) => d.toISOString().slice(0, 19).replace('T', ' ');
 
     if (windowData.length === 0) {
-       // ... (Keep existing empty state logic) ...
        const layout = {
-        title: {
-            text: `Distribution of ${columnSelect.value}<br><span style="font-size:12px;color:#9bb0db">${fmt(startTime)} — ${fmt(endTime)} (n=0)</span>`,
-            font: { color: '#e8eefc' }
-        },
-        paper_bgcolor: 'rgba(0,0,0,0)',
-        plot_bgcolor: 'rgba(0,0,0,0)',
-        font: { color: '#e8eefc' },
+        title: { text: `Distribution of ${columnSelect.value}<br><span style="font-size:12px;color:#9bb0db">${fmt(startTime)} — ${fmt(endTime)} (n=0)</span>`, font: { color: '#e8eefc' } },
+        paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)', font: { color: '#e8eefc' },
         xaxis: { showgrid: false, zeroline: false, showticklabels: false },
         yaxis: { showgrid: false, zeroline: false, showticklabels: false }
       };
@@ -670,20 +648,12 @@ function getWindowData(currentIndex) {
       return;
     }
 
-    // --- BINNING & AXIS LOGIC ---
     const binCountVal = parseInt(binCount.value) || 20;
-    
-    // 1. Determine Min/Max based on Lock state
     let min, max, allValuesForStats;
-    
-    // We always need window values for percentiles
     const windowValues = windowData.map(d => d.value).sort((a, b) => a - b);
 
     if (lockAxes) {
-        // Scan ENTIRE dataset for global min/max
-        // (In a real app, you might cache this, but it's fast enough for <100k rows)
-        let gMin = Infinity;
-        let gMax = -Infinity;
+        let gMin = Infinity, gMax = -Infinity;
         const col = columnSelect.value;
         for (let i = 0; i < state.data.length; i++) {
             const v = state.data[i][col];
@@ -692,34 +662,23 @@ function getWindowData(currentIndex) {
                 if (v > gMax) gMax = v;
             }
         }
-        min = gMin;
-        max = gMax;
-        allValuesForStats = windowValues; // Percentiles still based on window
+        min = gMin; max = gMax; allValuesForStats = windowValues;
     } else {
-        // Use Window Min/Max
-        min = windowValues[0];
-        max = windowValues[windowValues.length - 1];
-        allValuesForStats = windowValues;
+        min = windowValues[0]; max = windowValues[windowValues.length - 1]; allValuesForStats = windowValues;
     }
 
-    // 2. Calculate Bins
-    // Avoid zero-division if min equals max
     const rangeSpan = max - min;
     const binSize = rangeSpan === 0 ? 1 : rangeSpan / binCountVal;
     const loops = rangeSpan === 0 ? 1 : binCountVal;
-
     const binRanges = [];
     for (let i = 0; i < loops; i++) {
         const start = min + i * binSize;
         const end = min + (i + 1) * binSize;
-        // Label formatting
         const label = rangeSpan === 0 ? `${min}` : `${start.toFixed(2)} - ${end.toFixed(2)}`;
-        // Store midpoint for linear x-axis placement
         const mid = (start + end) / 2;
         binRanges.push({ start, end, label, mid });
     }
 
-    // 3. Group Data
     const groups = {};
     if (isGrouping) {
         windowData.forEach(d => {
@@ -727,151 +686,59 @@ function getWindowData(currentIndex) {
             if (!groups[g]) groups[g] = [];
             groups[g].push(d.value);
         });
-    } else {
-        groups['All'] = windowValues;
-    }
+    } else { groups['All'] = windowValues; }
 
-    // 4. Create Traces
     const traces = Object.keys(groups).sort().map(groupName => {
         const values = groups[groupName];
         const counts = binRanges.map((bin, i) => {
-            // Careful boundary check: last bin includes max
-            return values.filter(v => 
-                i === loops - 1 ? (v >= bin.start && v <= bin.end) : (v >= bin.start && v < bin.end)
-            ).length;
+            return values.filter(v => i === loops - 1 ? (v >= bin.start && v <= bin.end) : (v >= bin.start && v < bin.end)).length;
         });
-
         const traceColor = isGrouping ? state.groupColorMap[groupName] : 'rgba(122,162,255,0.8)';
-
         return {
-            type: 'bar',
-            name: groupName,
-            // Use Numerical Midpoints for X to allow accurate Line overlay
-            x: binRanges.map(b => b.mid),
-            y: counts,
-            // Manually set width so bars touch (linear axis)
+            type: 'bar', name: groupName, x: binRanges.map(b => b.mid), y: counts,
             width: binRanges.map(b => (b.end - b.start)), 
-            marker: {
-                color: traceColor,
-                line: { color: traceColor, width: 1 }
-            },
+            marker: { color: traceColor, line: { color: traceColor, width: 1 } },
             hovertemplate: `${isGrouping ? 'Group: ' + groupName + '<br>' : ''}Range: %{x}<br>Count: %{y}<extra></extra>`
         };
     });
 
-    // 5. Calculate Percentiles (Always based on Window Data)
     const p50 = calculatePercentile(allValuesForStats, 0.50);
     const p75 = calculatePercentile(allValuesForStats, 0.75);
     const p90 = calculatePercentile(allValuesForStats, 0.90);
     const p99 = calculatePercentile(allValuesForStats, 0.99);
-
     const percentileConfig = [
-        { val: p50, label: 'p50', color: '#ffd700' },
-        { val: p75, label: 'p75', color: '#ff9900' },
-        { val: p90, label: 'p90', color: '#ff6600' },
-        { val: p99, label: 'p99', color: '#ff3300' }
+        { val: p50, label: 'p50', color: '#ffd700' }, { val: p75, label: 'p75', color: '#ff9900' },
+        { val: p90, label: 'p90', color: '#ff6600' }, { val: p99, label: 'p99', color: '#ff3300' }
     ];
+    const shapes = percentileConfig.map(p => ({ type: 'line', x0: p.val, x1: p.val, y0: 0, y1: 1, xref: 'x', yref: 'paper', line: { color: p.color, width: 2, dash: 'dot' } }));
+    const annotations = percentileConfig.map(p => ({ x: p.val, y: 1, xref: 'x', yref: 'paper', text: p.label, showarrow: false, xanchor: 'left', yanchor: 'bottom', font: { color: p.color, size: 10 }, textangle: -90, yshift: 5 }));
 
-    const shapes = percentileConfig.map(p => ({
-        type: 'line',
-        x0: p.val, x1: p.val,
-        y0: 0, y1: 1,
-        xref: 'x', yref: 'paper',
-        line: { color: p.color, width: 2, dash: 'dot' }
-    }));
-
-    const annotations = percentileConfig.map(p => ({
-        x: p.val, y: 1,
-        xref: 'x', yref: 'paper',
-        text: p.label,
-        showarrow: false,
-        xanchor: 'left', yanchor: 'bottom',
-        font: { color: p.color, size: 10 },
-        textangle: -90,
-        yshift: 5
-    }));
-
-    // 6. Layout
     const layout = {
-      title: {
-        text: `Distribution of ${columnSelect.value}<br><span style="font-size:12px;color:#9bb0db">${fmt(startTime)} — ${fmt(endTime)} (n=${windowData.length})</span>`,
-        font: { color: '#e8eefc' }
-      },
+      title: { text: `Distribution of ${columnSelect.value}<br><span style="font-size:12px;color:#9bb0db">${fmt(startTime)} — ${fmt(endTime)} (n=${windowData.length})</span>`, font: { color: '#e8eefc' } },
       barmode: isGrouping ? 'stack' : 'group',
-      xaxis: {
-        title: 'Value',
-        automargin: true,
-        tickangle: -45,
-        gridcolor: 'rgba(255,255,255,0.1)',
-        linecolor: 'rgba(255,255,255,0.2)',
-        tickcolor: 'rgba(255,255,255,0.2)',
-        // LOCK X AXIS LOGIC
-        autorange: !lockAxes,
-        range: lockAxes ? [min, max] : null
-      },
-      yaxis: {
-        title: 'Count',
-        automargin: true,
-        gridcolor: 'rgba(255,255,255,0.1)',
-        linecolor: 'rgba(255,255,255,0.2)',
-        tickcolor: 'rgba(255,255,255,0.2)'
-        // Note: We deliberately do NOT lock Y to the global max count 
-        // because the window count is much smaller than the total count.
-        // Locking Y to global count would make bars invisible.
-      },
-      margin: { l: 50, r: 20, t: 80, b: 100 },
-      paper_bgcolor: 'rgba(0,0,0,0)',
-      plot_bgcolor: 'rgba(0,0,0,0)',
-      font: { color: '#e8eefc' },
-      shapes: shapes,
-      annotations: annotations,
-      legend: {
-        font: { color: '#e8eefc' },
-        orientation: 'h',
-        y: -0.2
-      }
+      xaxis: { title: 'Value', automargin: true, tickangle: -45, gridcolor: 'rgba(255,255,255,0.1)', linecolor: 'rgba(255,255,255,0.2)', tickcolor: 'rgba(255,255,255,0.2)', autorange: !lockAxes, range: lockAxes ? [min, max] : null },
+      yaxis: { title: 'Count', automargin: true, gridcolor: 'rgba(255,255,255,0.1)', linecolor: 'rgba(255,255,255,0.2)', tickcolor: 'rgba(255,255,255,0.2)' },
+      margin: { l: 50, r: 20, t: 80, b: 100 }, paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)', font: { color: '#e8eefc' },
+      shapes: shapes, annotations: annotations, legend: { font: { color: '#e8eefc' }, orientation: 'h', y: -0.2 }
     };
-
-    const config = {
-      responsive: true,
-      displaylogo: false,
-      modeBarButtonsToRemove: ['select2d','lasso2d']
-    };
-
-    Plotly.react('plot', traces, layout, config);
+    Plotly.react('plot', traces, layout, { responsive: true, displaylogo: false, modeBarButtonsToRemove: ['select2d','lasso2d'] });
     updateStatus(`Showing ${windowData.length} points from current window`);
     updateTimelineHighlight();
   }
 
   function animate() {
     if (!state.isPlaying) return;
-
     const stepSeconds = parseInt(stepSize.value) || 60;
     const stepMs = stepSeconds * 1000;
-
     let nextIndex = state.currentTimeIndex;
     const currentTime = state.data[state.currentTimeIndex].timestamp;
-
-    // Find next index based on time step
     for (let i = state.currentTimeIndex + 1; i < state.data.length; i++) {
-      if (state.data[i].timestamp.getTime() >= currentTime.getTime() + stepMs) {
-        nextIndex = i;
-        break;
-      }
+      if (state.data[i].timestamp.getTime() >= currentTime.getTime() + stepMs) { nextIndex = i; break; }
     }
-
-    if (nextIndex >= state.data.length - 1) {
-      // Reached end, stop animation
-      state.isPlaying = false;
-      updatePlayPauseButtons();
-      updateStatus('Animation completed');
-      return;
-    }
-
+    if (nextIndex >= state.data.length - 1) { state.isPlaying = false; updatePlayPauseButtons(); updateStatus('Animation completed'); return; }
     state.currentTimeIndex = nextIndex;
     updateTimeControls();
     drawHistogram();
-
     const speedVal = parseInt(speed.value) || 500;
     state.animationId = setTimeout(animate, speedVal);
   }
@@ -883,46 +750,38 @@ function getWindowData(currentIndex) {
     updateStatus('Animation playing...');
     animate();
   }
-
   function pauseAnimation() {
     state.isPlaying = false;
-    if (state.animationId) {
-      clearTimeout(state.animationId);
-      state.animationId = null;
-    }
+    if (state.animationId) { clearTimeout(state.animationId); state.animationId = null; }
     updatePlayPauseButtons();
     updateStatus('Animation paused');
   }
-
   function rewindAnimation() {
-    pauseAnimation();
-    state.currentTimeIndex = 0;
-    updateTimeControls();
-    drawHistogram();
-    updateStatus('Rewound to start');
+    pauseAnimation(); state.currentTimeIndex = 0;
+    updateTimeControls(); drawHistogram(); updateStatus('Rewound to start');
   }
+  function updatePlayPauseButtons() { playBtn.disabled = state.isPlaying; pauseBtn.disabled = !state.isPlaying; }
 
-  function updatePlayPauseButtons() {
-    playBtn.disabled = state.isPlaying;
-    pauseBtn.disabled = !state.isPlaying;
-  }
+  // --- FILE HANDLING ---
 
-  async function parseFile(file) {
-    return new Promise((resolve, reject) => {
-      Papa.parse(file, {
-        skipEmptyLines: true,
-        dynamicTyping: false,
-        complete: (res) => resolve(res.data),
-        error: (err) => reject(err)
-      });
-    });
-  }
+  async function parseFileContent(text, fileName) {
+    // 1. Try JSONL
+    if (text.trim().startsWith('{') || (fileName && (fileName.endsWith('.json') || fileName.endsWith('.jsonl')))) {
+        const jsonRes = parseJsonl(text);
+        if (jsonRes.length > 0) return jsonRes;
+    }
+    
+    // 2. Try Text Log (Timestamped lines)
+    // Heuristic: Check if start of text matches timestamp regex
+    if (/^\d{4}-\d{2}-\d{2}/.test(text) || (fileName && (fileName.endsWith('.log') || fileName.endsWith('.txt')))) {
+        const logRes = parseTextLog(text);
+        if (logRes.length > 0) return logRes;
+    }
 
-  async function parseClipboardText(text) {
+    // 3. Fallback to CSV (PapaParse)
     return new Promise((resolve, reject) => {
       Papa.parse(text, {
-        skipEmptyLines: true,
-        dynamicTyping: false,
+        skipEmptyLines: true, dynamicTyping: false,
         complete: (res) => resolve(res.data),
         error: (err) => reject(err)
       });
@@ -933,157 +792,89 @@ function getWindowData(currentIndex) {
     try {
       const parsed = parseData(rawData);
       loadData(parsed);
-      drawHistogram();
     } catch (e) {
       updateStatus(`Error: ${e.message}`);
       console.error(e);
     }
   }
 
-  // Event listeners
+  const handleFile = async (file) => {
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+          const text = e.target.result;
+          try {
+              const raw = await parseFileContent(text, file.name);
+              await addData(raw);
+          } catch (err) {
+              updateStatus(`Error parsing file: ${err.message}`);
+          }
+      };
+      reader.readAsText(file);
+  };
+
   pickBtn.addEventListener('click', () => fileInput.click());
-  fileInput.addEventListener('change', async (e) => {
-    const file = e.target.files[0];
-    if (file) {
-      try {
-        const raw = await parseFile(file);
-        await addData(raw);
-      } catch (e) {
-        updateStatus(`Error parsing file: ${e.message}`);
-      }
-    }
-  });
+  fileInput.addEventListener('change', (e) => handleFile(e.target.files[0]));
 
   pasteBtn.addEventListener('click', async () => {
     try {
       const text = await navigator.clipboard.readText();
-      const raw = await parseClipboardText(text);
+      const raw = await parseFileContent(text, 'clipboard.txt'); // Treat as generic text
       await addData(raw);
-    } catch (e) {
-      updateStatus(`Error reading clipboard: ${e.message}`);
-    }
+    } catch (e) { updateStatus(`Error reading clipboard: ${e.message}`); }
   });
 
-  ['dragenter','dragover'].forEach(ev => {
-    dropZone.addEventListener(ev, (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      dropZone.classList.add('dragover');
-    });
-  });
-  ['dragleave','drop'].forEach(ev => {
-    dropZone.addEventListener(ev, (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      dropZone.classList.remove('dragover');
-    });
-  });
+  ['dragenter','dragover'].forEach(ev => dropZone.addEventListener(ev, (e) => { e.preventDefault(); e.stopPropagation(); dropZone.classList.add('dragover'); }));
+  ['dragleave','drop'].forEach(ev => dropZone.addEventListener(ev, (e) => { e.preventDefault(); e.stopPropagation(); dropZone.classList.remove('dragover'); }));
+  
   dropZone.addEventListener('drop', async (e) => {
     const dt = e.dataTransfer;
     if (dt && dt.files && dt.files[0]) {
-      const file = dt.files[0];
-      try {
-        const raw = await parseFile(file);
-        await addData(raw);
-      } catch (e) {
-        updateStatus(`Error parsing dropped file: ${e.message}`);
-      }
+      handleFile(dt.files[0]);
     }
   });
 
+  // UI Event Listeners
   clearBtn.addEventListener('click', () => {
-    state.data = null;
-    state.columns = [];
-    state.currentTimeIndex = 0;
-    state.isPlaying = false;
-    if (state.animationId) {
-      clearTimeout(state.animationId);
-      state.animationId = null;
-    }
-    updateColumnSelect();
-    updateDataStatus();
-    updateTimeControls();
-    updatePlayPauseButtons();
-    filterColumn.value = '';
-    filterValue.value = '';
-    drawHistogram();
-    drawTimeline();
-    updateStatus('Data cleared');
+    state.data = null; state.columns = []; state.currentTimeIndex = 0; state.isPlaying = false;
+    if (state.animationId) { clearTimeout(state.animationId); state.animationId = null; }
+    updateColumnSelect(); updateDataStatus(); updateTimeControls(); updatePlayPauseButtons();
+    filterColumn.value = ''; filterValue.value = '';
+    drawHistogram(); drawTimeline(); updateStatus('Data cleared');
   });
 
-  columnSelect.addEventListener('change', () => {
-    if (columnSelect.value) {
-      drawHistogram();
-    }
+  [columnSelect, binCount, windowSize, $('lockAxes')].forEach(el => {
+    if(el) el.addEventListener('change', () => { if (state.data && columnSelect.value) drawHistogram(); });
   });
-
-  [binCount, windowSize].forEach(el => {
-    el.addEventListener('change', () => {
-      if (state.data && columnSelect.value) {
-        drawHistogram();
-      }
-    });
-  });
-
-  const lockAxes = $('lockAxes');
-  if (lockAxes) {
-    lockAxes.addEventListener('change', () => {
-        if (state.data && columnSelect.value) {
-            drawHistogram();
-        }
-    });
-  }
 
   [filterColumn, filterPredicate, filterValue].forEach(el => {
-    el.addEventListener('change', () => {
-      if (state.data && columnSelect.value) {
-        drawHistogram();
-      }
-    });
-    if (el.type === 'text') {
-      el.addEventListener('input', () => {
-        if (state.data && columnSelect.value) {
-          drawHistogram();
-        }
-      });
-    }
+    el.addEventListener('change', () => { if (state.data && columnSelect.value) drawHistogram(); });
+    if (el.type === 'text') el.addEventListener('input', () => { if (state.data && columnSelect.value) drawHistogram(); });
   });
 
   playBtn.addEventListener('click', startAnimation);
   pauseBtn.addEventListener('click', pauseAnimation);
   rewindBtn.addEventListener('click', rewindAnimation);
-
-  const groupByColumn = $('groupByColumn');
-groupByColumn.addEventListener('change', () => {
+  
+  groupByColumn.addEventListener('change', () => {
     if (state.data && columnSelect.value) {
-      // Logic from before: regenerate colors
       const groupColName = groupByColumn.value;
       if (state.currentGroupCol !== groupColName) {
          state.groupColorMap = generateColorMap(groupColName);
          state.currentGroupCol = groupColName;
       }
-      
-      // Update Main Chart
-      drawHistogram();
-      // NEW: Update Timeline Chart (to reflect new colors)
-      drawTimeline();
+      drawHistogram(); drawTimeline();
     }
   });
 
   timeSlider.addEventListener('input', (e) => {
-    pauseAnimation();
-    state.currentTimeIndex = parseInt(e.target.value);
-    updateTimeControls();
-    drawHistogram();
+    pauseAnimation(); state.currentTimeIndex = parseInt(e.target.value);
+    updateTimeControls(); drawHistogram();
   });
 
-  // Initialize
-  updateDataStatus();
-  updateTimeControls();
-  updatePlayPauseButtons();
-  drawHistogram();
+  // Init
+  updateDataStatus(); updateTimeControls(); updatePlayPauseButtons(); drawHistogram();
 })();
 </script>
 </body>
-</html></content>
-<parameter name="filePath">/Users/david.pecollet/projects/vibe-tools/rolling_distribution.html
+</html>
