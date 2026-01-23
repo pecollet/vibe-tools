@@ -158,16 +158,21 @@
 
           <div style="height:16px"></div>
 
-          <div class="animation-controls">
-            <button class="btn" id="playBtn">Play</button>
-            <button class="btn" id="pauseBtn" disabled>Pause</button>
-            <button class="btn" id="rewindBtn">Rewind</button>
-            <div class="slider-container">
-              <input id="timeSlider" type="range" min="0" max="100" value="0" style="width:100%" />
+          <div class="animation-controls" style="justify-content: space-between;">
+            <div class="control-group">
+              <button class="btn" id="rewindBtn" title="Rewind" style="font-size:18px; padding:6px 14px;">⏮</button>
+              <button class="btn" id="playBtn" title="Play" style="font-size:18px; padding:6px 14px;">▶</button>
+              <button class="btn" id="pauseBtn" title="Pause" disabled style="font-size:18px; padding:6px 14px;">⏸</button>
             </div>
-            <div class="time-display" id="timeDisplay">--:--</div>
+            
+            <div class="time-display" id="timeDisplay" style="font-family:monospace; font-size:14px;">--:--</div>
           </div>
 
+          <div class="slider-container" style="width:100%; margin-top:12px; margin-bottom:0px;">
+            <input id="timeSlider" type="range" min="0" max="100" value="0" style="width:100%; display:block; cursor:pointer;" />
+          </div>
+
+          <div id="timelinePlot" style="height:120px; border-top:1px solid var(--border); padding-top:0;"></div>
           <div class="status" id="statusText">Ready to load data</div>
         </div>
       </div>
@@ -375,6 +380,8 @@ function parseData(rawData) {
     updateDataStatus();
     updateTimeControls();
     updateStatus('Data loaded successfully');
+
+    drawTimeline();
   }
 
   function updateDataStatus() {
@@ -500,7 +507,121 @@ function getWindowData(currentIndex) {
     return map;
   }
 
-function drawHistogram() {
+  function drawTimeline() {
+    if (!state.data || state.data.length === 0) {
+      Plotly.react('timelinePlot', [], {
+        paper_bgcolor: 'rgba(0,0,0,0)',
+        plot_bgcolor: 'rgba(0,0,0,0)',
+        xaxis: { showgrid: false, showticklabels: false },
+        yaxis: { showgrid: false, showticklabels: false }
+      });
+      return;
+    }
+
+    const totalStart = state.data[0].timestamp.getTime();
+    const totalEnd = state.data[state.data.length - 1].timestamp.getTime();
+    const totalDuration = totalEnd - totalStart;
+    
+    const binCountTarget = 100;
+    const binStepMs = totalDuration <= 0 ? 1000 : totalDuration / binCountTarget;
+
+    const groupByColumn = $('groupByColumn');
+    const groupColName = groupByColumn ? groupByColumn.value : "";
+    const isGrouping = groupColName !== "";
+
+    const bins = new Map();
+    state.data.forEach(row => {
+        const t = row.timestamp.getTime();
+        const binIdx = Math.floor((t - totalStart) / binStepMs);
+        const g = isGrouping ? (row[groupColName] ?? 'Unknown').toString() : 'All';
+        if (!bins.has(binIdx)) bins.set(binIdx, {});
+        const binObj = bins.get(binIdx);
+        binObj[g] = (binObj[g] || 0) + 1;
+    });
+
+    const allGroups = isGrouping ? Object.keys(state.groupColorMap).sort() : ['All'];
+    const sortedBinIndices = Array.from(bins.keys()).sort((a, b) => a - b);
+    const xValues = sortedBinIndices.map(i => new Date(totalStart + i * binStepMs + binStepMs/2));
+
+    const traces = allGroups.map(groupName => {
+        const yValues = sortedBinIndices.map(i => bins.get(i)[groupName] || 0);
+        const color = isGrouping ? state.groupColorMap[groupName] : 'rgba(122,162,255,0.5)';
+        
+        return {
+            type: 'bar',
+            name: groupName,
+            x: xValues,
+            y: yValues,
+            marker: { color: color },
+            hoverinfo: 'none' // No hover tooltips
+        };
+    });
+
+    const layout = {
+        barmode: 'stack',
+        // Minimize margins to align better with the slider above it
+        margin: { l: 0, r: 0, t: 10, b: 0 }, 
+        paper_bgcolor: 'rgba(0,0,0,0)',
+        plot_bgcolor: 'rgba(0,0,0,0)',
+        showlegend: false,
+        xaxis: {
+            type: 'date',
+            range: [totalStart, totalEnd], // Explicitly lock range
+            fixedrange: true, // Disable zoom/pan on axis
+            showgrid: false,
+            showticklabels: false // Hide labels for cleaner "sparkline" look
+        },
+        yaxis: {
+            fixedrange: true, // Disable zoom/pan
+            showgrid: false,
+            showticklabels: false,
+            zeroline: false
+        },
+        hovermode: false, // Global disable hover
+        dragmode: false,  // Global disable drag
+        shapes: [] 
+    };
+
+    // 'staticPlot: true' makes it purely illustrative (no interactions)
+    const config = { 
+        displayModeBar: false, 
+        responsive: true, 
+        staticPlot: true 
+    };
+    
+    Plotly.react('timelinePlot', traces, layout, config);
+    
+    updateTimelineHighlight();
+  }
+
+  function updateTimelineHighlight() {
+    if (!state.data || state.data.length === 0) return;
+
+    // Calculate Window Start/End
+    const endTime = state.data[state.currentTimeIndex].timestamp;
+    const wMinutes = parseInt(windowSize.value) || 1;
+    const startTime = new Date(endTime.getTime() - wMinutes * 60 * 1000);
+
+    // Create the Shape (Rectangle overlay)
+    const windowShape = {
+        type: 'rect',
+        xref: 'x', yref: 'paper',
+        x0: startTime,
+        x1: endTime,
+        y0: 0, y1: 1,
+        fillcolor: '#fff',
+        opacity: 0.15,
+        line: {
+            color: '#fff',
+            width: 1
+        }
+    };
+
+    // Use relayout for performance (doesn't redraw the whole chart data)
+    Plotly.relayout('timelinePlot', { shapes: [windowShape] });
+  }
+
+  function drawHistogram() {
     if (!state.data || !columnSelect.value) {
       Plotly.react('plot', [], {
         paper_bgcolor: 'rgba(0,0,0,0)',
@@ -719,6 +840,7 @@ function drawHistogram() {
 
     Plotly.react('plot', traces, layout, config);
     updateStatus(`Showing ${windowData.length} points from current window`);
+    updateTimelineHighlight();
   }
 
   function animate() {
@@ -885,6 +1007,7 @@ function drawHistogram() {
     filterColumn.value = '';
     filterValue.value = '';
     drawHistogram();
+    drawTimeline();
     updateStatus('Data cleared');
   });
 
@@ -931,9 +1054,19 @@ function drawHistogram() {
   rewindBtn.addEventListener('click', rewindAnimation);
 
   const groupByColumn = $('groupByColumn');
-  groupByColumn.addEventListener('change', () => {
+groupByColumn.addEventListener('change', () => {
     if (state.data && columnSelect.value) {
+      // Logic from before: regenerate colors
+      const groupColName = groupByColumn.value;
+      if (state.currentGroupCol !== groupColName) {
+         state.groupColorMap = generateColorMap(groupColName);
+         state.currentGroupCol = groupColName;
+      }
+      
+      // Update Main Chart
       drawHistogram();
+      // NEW: Update Timeline Chart (to reflect new colors)
+      drawTimeline();
     }
   });
 
