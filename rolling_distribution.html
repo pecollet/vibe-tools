@@ -98,6 +98,12 @@
               <label for="windowSize">Window Size (minutes)</label>
               <input id="windowSize" type="number" min="1" max="1440" value="1" />
             </div>
+            <div class="form-group">
+                <label for="lockAxes">Lock X-Axis</label>
+                <div class="control-group">
+                    <input id="lockAxes" type="checkbox" style="width:20px;height:20px;" checked>
+                </div>
+            </div>
           </div>
 
           <div style="height:16px"></div>
@@ -152,16 +158,21 @@
 
           <div style="height:16px"></div>
 
-          <div class="animation-controls">
-            <button class="btn" id="playBtn">Play</button>
-            <button class="btn" id="pauseBtn" disabled>Pause</button>
-            <button class="btn" id="rewindBtn">Rewind</button>
-            <div class="slider-container">
-              <input id="timeSlider" type="range" min="0" max="100" value="0" style="width:100%" />
+          <div class="animation-controls" style="justify-content: space-between;">
+            <div class="control-group">
+              <button class="btn" id="rewindBtn" title="Rewind" style="font-size:18px; padding:6px 14px;">⏮</button>
+              <button class="btn" id="playBtn" title="Play" style="font-size:18px; padding:6px 14px;">▶</button>
+              <button class="btn" id="pauseBtn" title="Pause" disabled style="font-size:18px; padding:6px 14px;">⏸</button>
             </div>
-            <div class="time-display" id="timeDisplay">--:--</div>
+            
+            <div class="time-display" id="timeDisplay" style="font-family:monospace; font-size:14px;">--:--</div>
           </div>
 
+          <div class="slider-container" style="width:100%; margin-top:12px; margin-bottom:0px;">
+            <input id="timeSlider" type="range" min="0" max="100" value="0" style="width:100%; display:block; cursor:pointer;" />
+          </div>
+
+          <div id="timelinePlot" style="height:120px; border-top:1px solid var(--border); padding-top:0;"></div>
           <div class="status" id="statusText">Ready to load data</div>
         </div>
       </div>
@@ -369,6 +380,8 @@ function parseData(rawData) {
     updateDataStatus();
     updateTimeControls();
     updateStatus('Data loaded successfully');
+
+    drawTimeline();
   }
 
   function updateDataStatus() {
@@ -494,7 +507,121 @@ function getWindowData(currentIndex) {
     return map;
   }
 
-function drawHistogram() {
+  function drawTimeline() {
+    if (!state.data || state.data.length === 0) {
+      Plotly.react('timelinePlot', [], {
+        paper_bgcolor: 'rgba(0,0,0,0)',
+        plot_bgcolor: 'rgba(0,0,0,0)',
+        xaxis: { showgrid: false, showticklabels: false },
+        yaxis: { showgrid: false, showticklabels: false }
+      });
+      return;
+    }
+
+    const totalStart = state.data[0].timestamp.getTime();
+    const totalEnd = state.data[state.data.length - 1].timestamp.getTime();
+    const totalDuration = totalEnd - totalStart;
+    
+    const binCountTarget = 100;
+    const binStepMs = totalDuration <= 0 ? 1000 : totalDuration / binCountTarget;
+
+    const groupByColumn = $('groupByColumn');
+    const groupColName = groupByColumn ? groupByColumn.value : "";
+    const isGrouping = groupColName !== "";
+
+    const bins = new Map();
+    state.data.forEach(row => {
+        const t = row.timestamp.getTime();
+        const binIdx = Math.floor((t - totalStart) / binStepMs);
+        const g = isGrouping ? (row[groupColName] ?? 'Unknown').toString() : 'All';
+        if (!bins.has(binIdx)) bins.set(binIdx, {});
+        const binObj = bins.get(binIdx);
+        binObj[g] = (binObj[g] || 0) + 1;
+    });
+
+    const allGroups = isGrouping ? Object.keys(state.groupColorMap).sort() : ['All'];
+    const sortedBinIndices = Array.from(bins.keys()).sort((a, b) => a - b);
+    const xValues = sortedBinIndices.map(i => new Date(totalStart + i * binStepMs + binStepMs/2));
+
+    const traces = allGroups.map(groupName => {
+        const yValues = sortedBinIndices.map(i => bins.get(i)[groupName] || 0);
+        const color = isGrouping ? state.groupColorMap[groupName] : 'rgba(122,162,255,0.5)';
+        
+        return {
+            type: 'bar',
+            name: groupName,
+            x: xValues,
+            y: yValues,
+            marker: { color: color },
+            hoverinfo: 'none' // No hover tooltips
+        };
+    });
+
+    const layout = {
+        barmode: 'stack',
+        // Minimize margins to align better with the slider above it
+        margin: { l: 0, r: 0, t: 10, b: 0 }, 
+        paper_bgcolor: 'rgba(0,0,0,0)',
+        plot_bgcolor: 'rgba(0,0,0,0)',
+        showlegend: false,
+        xaxis: {
+            type: 'date',
+            range: [totalStart, totalEnd], // Explicitly lock range
+            fixedrange: true, // Disable zoom/pan on axis
+            showgrid: false,
+            showticklabels: false // Hide labels for cleaner "sparkline" look
+        },
+        yaxis: {
+            fixedrange: true, // Disable zoom/pan
+            showgrid: false,
+            showticklabels: false,
+            zeroline: false
+        },
+        hovermode: false, // Global disable hover
+        dragmode: false,  // Global disable drag
+        shapes: [] 
+    };
+
+    // 'staticPlot: true' makes it purely illustrative (no interactions)
+    const config = { 
+        displayModeBar: false, 
+        responsive: true, 
+        staticPlot: true 
+    };
+    
+    Plotly.react('timelinePlot', traces, layout, config);
+    
+    updateTimelineHighlight();
+  }
+
+  function updateTimelineHighlight() {
+    if (!state.data || state.data.length === 0) return;
+
+    // Calculate Window Start/End
+    const endTime = state.data[state.currentTimeIndex].timestamp;
+    const wMinutes = parseInt(windowSize.value) || 1;
+    const startTime = new Date(endTime.getTime() - wMinutes * 60 * 1000);
+
+    // Create the Shape (Rectangle overlay)
+    const windowShape = {
+        type: 'rect',
+        xref: 'x', yref: 'paper',
+        x0: startTime,
+        x1: endTime,
+        y0: 0, y1: 1,
+        fillcolor: '#fff',
+        opacity: 0.15,
+        line: {
+            color: '#fff',
+            width: 1
+        }
+    };
+
+    // Use relayout for performance (doesn't redraw the whole chart data)
+    Plotly.relayout('timelinePlot', { shapes: [windowShape] });
+  }
+
+  function drawHistogram() {
     if (!state.data || !columnSelect.value) {
       Plotly.react('plot', [], {
         paper_bgcolor: 'rgba(0,0,0,0)',
@@ -504,17 +631,19 @@ function drawHistogram() {
       return;
     }
 
-    // Check grouping state
+    const lockAxes = $('lockAxes').checked;
+
+    // --- GROUPING & COLOR MAP ---
     const groupByColumn = $('groupByColumn');
     const groupColName = groupByColumn ? groupByColumn.value : "";
     const isGrouping = groupColName !== "";
 
-    // Regenerate colors if group column changed
     if (isGrouping && state.currentGroupCol !== groupColName) {
         state.groupColorMap = generateColorMap(groupColName);
         state.currentGroupCol = groupColName;
     }
 
+    // --- DATA RETRIEVAL ---
     const windowData = getWindowData(state.currentTimeIndex);
     
     // Time Header
@@ -524,7 +653,8 @@ function drawHistogram() {
     const fmt = (d) => d.toISOString().slice(0, 19).replace('T', ' ');
 
     if (windowData.length === 0) {
-      const layout = {
+       // ... (Keep existing empty state logic) ...
+       const layout = {
         title: {
             text: `Distribution of ${columnSelect.value}<br><span style="font-size:12px;color:#9bb0db">${fmt(startTime)} — ${fmt(endTime)} (n=0)</span>`,
             font: { color: '#e8eefc' }
@@ -540,24 +670,56 @@ function drawHistogram() {
       return;
     }
 
-    // --- Binning Logic ---
+    // --- BINNING & AXIS LOGIC ---
     const binCountVal = parseInt(binCount.value) || 20;
-    // Extract raw numerical values for stats and binning
-    const allValues = windowData.map(d => d.value).sort((a, b) => a - b);
     
-    const min = allValues[0];
-    const max = allValues[allValues.length - 1];
-    const binSize = min === max ? 1 : (max - min) / binCountVal;
-    const loops = min === max ? 1 : binCountVal;
+    // 1. Determine Min/Max based on Lock state
+    let min, max, allValuesForStats;
+    
+    // We always need window values for percentiles
+    const windowValues = windowData.map(d => d.value).sort((a, b) => a - b);
+
+    if (lockAxes) {
+        // Scan ENTIRE dataset for global min/max
+        // (In a real app, you might cache this, but it's fast enough for <100k rows)
+        let gMin = Infinity;
+        let gMax = -Infinity;
+        const col = columnSelect.value;
+        for (let i = 0; i < state.data.length; i++) {
+            const v = state.data[i][col];
+            if (typeof v === 'number' && Number.isFinite(v)) {
+                if (v < gMin) gMin = v;
+                if (v > gMax) gMax = v;
+            }
+        }
+        min = gMin;
+        max = gMax;
+        allValuesForStats = windowValues; // Percentiles still based on window
+    } else {
+        // Use Window Min/Max
+        min = windowValues[0];
+        max = windowValues[windowValues.length - 1];
+        allValuesForStats = windowValues;
+    }
+
+    // 2. Calculate Bins
+    // Avoid zero-division if min equals max
+    const rangeSpan = max - min;
+    const binSize = rangeSpan === 0 ? 1 : rangeSpan / binCountVal;
+    const loops = rangeSpan === 0 ? 1 : binCountVal;
 
     const binRanges = [];
     for (let i = 0; i < loops; i++) {
         const start = min + i * binSize;
         const end = min + (i + 1) * binSize;
-        binRanges.push({ start, end, label: min === max ? `${min}` : `${start.toFixed(2)} - ${end.toFixed(2)}` });
+        // Label formatting
+        const label = rangeSpan === 0 ? `${min}` : `${start.toFixed(2)} - ${end.toFixed(2)}`;
+        // Store midpoint for linear x-axis placement
+        const mid = (start + end) / 2;
+        binRanges.push({ start, end, label, mid });
     }
 
-    // --- Grouping Logic ---
+    // 3. Group Data
     const groups = {};
     if (isGrouping) {
         windowData.forEach(d => {
@@ -566,13 +728,14 @@ function drawHistogram() {
             groups[g].push(d.value);
         });
     } else {
-        groups['All'] = allValues; // Use already extracted values
+        groups['All'] = windowValues;
     }
 
-    // Create Traces
+    // 4. Create Traces
     const traces = Object.keys(groups).sort().map(groupName => {
         const values = groups[groupName];
         const counts = binRanges.map((bin, i) => {
+            // Careful boundary check: last bin includes max
             return values.filter(v => 
                 i === loops - 1 ? (v >= bin.start && v <= bin.end) : (v >= bin.start && v < bin.end)
             ).length;
@@ -583,8 +746,11 @@ function drawHistogram() {
         return {
             type: 'bar',
             name: groupName,
-            x: binRanges.map(b => b.label),
+            // Use Numerical Midpoints for X to allow accurate Line overlay
+            x: binRanges.map(b => b.mid),
             y: counts,
+            // Manually set width so bars touch (linear axis)
+            width: binRanges.map(b => (b.end - b.start)), 
             marker: {
                 color: traceColor,
                 line: { color: traceColor, width: 1 }
@@ -593,51 +759,39 @@ function drawHistogram() {
         };
     });
 
-    // --- NEW: Calculate Percentiles & Create Shapes ---
-    const p50 = calculatePercentile(allValues, 0.50);
-    const p75 = calculatePercentile(allValues, 0.75);
-    const p90 = calculatePercentile(allValues, 0.90);
-    const p99 = calculatePercentile(allValues, 0.99);
+    // 5. Calculate Percentiles (Always based on Window Data)
+    const p50 = calculatePercentile(allValuesForStats, 0.50);
+    const p75 = calculatePercentile(allValuesForStats, 0.75);
+    const p90 = calculatePercentile(allValuesForStats, 0.90);
+    const p99 = calculatePercentile(allValuesForStats, 0.99);
 
     const percentileConfig = [
-        { val: p50, label: 'p50', color: '#ffd700' }, // Gold
-        { val: p75, label: 'p75', color: '#ff9900' }, // Orange
-        { val: p90, label: 'p90', color: '#ff6600' }, // Dark Orange
-        { val: p99, label: 'p99', color: '#ff3300' }  // Red
+        { val: p50, label: 'p50', color: '#ffd700' },
+        { val: p75, label: 'p75', color: '#ff9900' },
+        { val: p90, label: 'p90', color: '#ff6600' },
+        { val: p99, label: 'p99', color: '#ff3300' }
     ];
 
-    // Create vertical dotted lines
     const shapes = percentileConfig.map(p => ({
         type: 'line',
-        x0: p.val,
-        x1: p.val,
-        y0: 0,
-        y1: 1,
-        xref: 'x', // Map to x-axis values (the data)
-        yref: 'paper', // Map to full height of plot area
-        line: {
-            color: p.color,
-            width: 2,
-            dash: 'dot'
-        }
+        x0: p.val, x1: p.val,
+        y0: 0, y1: 1,
+        xref: 'x', yref: 'paper',
+        line: { color: p.color, width: 2, dash: 'dot' }
     }));
 
-    // Create labels at the top of the lines
     const annotations = percentileConfig.map(p => ({
-        x: p.val,
-        y: 1,
-        xref: 'x',
-        yref: 'paper',
+        x: p.val, y: 1,
+        xref: 'x', yref: 'paper',
         text: p.label,
         showarrow: false,
-        xanchor: 'left',
-        yanchor: 'bottom',
+        xanchor: 'left', yanchor: 'bottom',
         font: { color: p.color, size: 10 },
-        textangle: -90, // Vertical text so they don't overlap easily
+        textangle: -90,
         yshift: 5
     }));
-    // --------------------------------------------------
 
+    // 6. Layout
     const layout = {
       title: {
         text: `Distribution of ${columnSelect.value}<br><span style="font-size:12px;color:#9bb0db">${fmt(startTime)} — ${fmt(endTime)} (n=${windowData.length})</span>`,
@@ -645,43 +799,15 @@ function drawHistogram() {
       },
       barmode: isGrouping ? 'stack' : 'group',
       xaxis: {
-        title: 'Value Range',
-        automargin: true,
-        // Ensure the x-axis handles the raw numbers correctly for the lines to map
-        // Note: Bar charts usually use categories (strings) for X. 
-        // To mix Bars (categorical X) and Lines (numerical X), we must be careful.
-        // However, Plotly is smart. If we use strings for Bar X, we can't easily map numerical lines.
-        // TRICK: We will not change X axis type, but we must map the Line X value to the Bin it falls into?
-        // Actually, it's cleaner to just overlay lines if X is linear. 
-        // But our Histogram Bins are strings "10-20".
-        // **FIX**: We need to map the percentile value to the approximate X-coordinate (bin index).
-      },
-      // Since our Bar chart uses CATEGORICAL strings as X-axis ("1.00 - 2.00"), 
-      // we cannot simply draw a line at x=1.5. 
-      // We need to switch the chart to use a numerical X-axis histogram or approximate the position.
-      // BUT, changing to 'histogram' type breaks our custom binning logic.
-      //
-      // BETTER APPROACH for this specific codebase: 
-      // Keep X-axis as strings, but don't draw lines on the X-axis. 
-      // Draw lines on the *bins*? No, that's inaccurate.
-      // 
-      // CORRECT FIX: We must use a linear X-axis for the bars.
-      // We will provide x as the *midpoint* of the bin, and set `width` of bars.
-      margin: { l: 50, r: 20, t: 80, b: 100 }, // Increase top margin for labels
-      paper_bgcolor: 'rgba(0,0,0,0)',
-      plot_bgcolor: 'rgba(0,0,0,0)',
-      font: { color: '#e8eefc' },
-      shapes: shapes,           // Add the lines
-      annotations: annotations, // Add the labels
-      
-      // CRITICAL: We need the X-axis to be linear for the lines to appear at the correct mathematical position
-      xaxis: {
         title: 'Value',
         automargin: true,
         tickangle: -45,
         gridcolor: 'rgba(255,255,255,0.1)',
         linecolor: 'rgba(255,255,255,0.2)',
-        tickcolor: 'rgba(255,255,255,0.2)'
+        tickcolor: 'rgba(255,255,255,0.2)',
+        // LOCK X AXIS LOGIC
+        autorange: !lockAxes,
+        range: lockAxes ? [min, max] : null
       },
       yaxis: {
         title: 'Count',
@@ -689,24 +815,22 @@ function drawHistogram() {
         gridcolor: 'rgba(255,255,255,0.1)',
         linecolor: 'rgba(255,255,255,0.2)',
         tickcolor: 'rgba(255,255,255,0.2)'
+        // Note: We deliberately do NOT lock Y to the global max count 
+        // because the window count is much smaller than the total count.
+        // Locking Y to global count would make bars invisible.
       },
+      margin: { l: 50, r: 20, t: 80, b: 100 },
+      paper_bgcolor: 'rgba(0,0,0,0)',
+      plot_bgcolor: 'rgba(0,0,0,0)',
+      font: { color: '#e8eefc' },
+      shapes: shapes,
+      annotations: annotations,
       legend: {
         font: { color: '#e8eefc' },
         orientation: 'h',
         y: -0.2
       }
     };
-
-    // --- FIX FOR AXIS ALIGNMENT ---
-    // For the percentiles to show up at the correct X position (e.g. 55.4) while using custom bins,
-    // we must position the bars at the numerical centers of the bins.
-    traces.forEach(t => {
-       // Replace the string labels ["10-20", "20-30"] with numerical midpoints [15, 25]
-       // so they share the same numerical axis as the percentile lines.
-       t.x = binRanges.map(b => (b.start + b.end) / 2);
-       // Set the width of the bars so they touch
-       t.width = binRanges.map(b => (b.end - b.start));
-    });
 
     const config = {
       responsive: true,
@@ -716,7 +840,9 @@ function drawHistogram() {
 
     Plotly.react('plot', traces, layout, config);
     updateStatus(`Showing ${windowData.length} points from current window`);
+    updateTimelineHighlight();
   }
+
   function animate() {
     if (!state.isPlaying) return;
 
@@ -881,6 +1007,7 @@ function drawHistogram() {
     filterColumn.value = '';
     filterValue.value = '';
     drawHistogram();
+    drawTimeline();
     updateStatus('Data cleared');
   });
 
@@ -897,6 +1024,15 @@ function drawHistogram() {
       }
     });
   });
+
+  const lockAxes = $('lockAxes');
+  if (lockAxes) {
+    lockAxes.addEventListener('change', () => {
+        if (state.data && columnSelect.value) {
+            drawHistogram();
+        }
+    });
+  }
 
   [filterColumn, filterPredicate, filterValue].forEach(el => {
     el.addEventListener('change', () => {
@@ -918,9 +1054,19 @@ function drawHistogram() {
   rewindBtn.addEventListener('click', rewindAnimation);
 
   const groupByColumn = $('groupByColumn');
-  groupByColumn.addEventListener('change', () => {
+groupByColumn.addEventListener('change', () => {
     if (state.data && columnSelect.value) {
+      // Logic from before: regenerate colors
+      const groupColName = groupByColumn.value;
+      if (state.currentGroupCol !== groupColName) {
+         state.groupColorMap = generateColorMap(groupColName);
+         state.currentGroupCol = groupColName;
+      }
+      
+      // Update Main Chart
       drawHistogram();
+      // NEW: Update Timeline Chart (to reflect new colors)
+      drawTimeline();
     }
   });
 
