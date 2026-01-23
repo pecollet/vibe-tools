@@ -115,7 +115,7 @@
         <div>
           <h3 style="margin:0 0 8px 0; font-size:14px;">SFTP</h3>
           <a class="btn" href="https://login.prod.cs-neo4j.com" target="_blank" rel="noopener noreferrer">SFTP 1-time code ↗</a>
-          <a class="btn" href="ftp://first.last@neo4j.com@sftp.healthcheck.neo4j.com/" target="_blank" rel="noopener noreferrer">SFTP ↗</a>
+          <a id="ftpLink" class="btn" target="_blank" rel="noopener noreferrer">SFTP ↗</a>
         </div>
         <div>
           <h3 style="margin:0 0 8px 0; font-size:14px;">HTTP</h3>
@@ -196,6 +196,8 @@
         const s3Prefix = `healthchecks/${currentEmail}/${dbid}/${current_YYYYMMDD_date_str}/`;
         const s3Url = `https://s3.console.aws.amazon.com/s3/buckets/cs-upload-bucket-prod?region=eu-west-1&prefix=${s3Prefix}&showversions=false`;
         s3Link.href = `https://d-92676bf303.awsapps.com/start/#/console?account_id=${awsAccount}&role_name=${awsRole}&destination=` + encodeURIComponent(s3Url);
+
+        ftpLink.href = `ftp://${currentEmail}@sftp.healthcheck.neo4j.com/`;
       }
 
 
