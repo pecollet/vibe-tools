@@ -116,6 +116,7 @@
           <h3 style="margin:0 0 8px 0; font-size:14px;">SFTP</h3>
           <a class="btn" href="https://login.prod.cs-neo4j.com" target="_blank" rel="noopener noreferrer">SFTP 1-time code ↗</a>
           <a id="ftpLink" class="btn" target="_blank" rel="noopener noreferrer">SFTP ↗</a>
+          <a id="itermDownloadLink" style="font-size:12px; margin-top:8px; display:inline-block; text-decoration:underline; cursor:pointer; opacity:0.8; color:inherit;">get iTerm SFTP profile ⬇</a>
         </div>
         <div>
           <h3 style="margin:0 0 8px 0; font-size:14px;">HTTP</h3>
@@ -136,11 +137,11 @@
   <script>
     (function () {
       const STORAGE_KEY = 'dbidHistory.v2';
-      const EMAIL_STORAGE_KEY = 'userEmail.v1'; // New storage key
+      const EMAIL_STORAGE_KEY = 'userEmail.v1';
       const MAX_HISTORY = 20;
 
       const input = document.getElementById('dbid');
-      const emailInput = document.getElementById('userEmail'); // New input reference
+      const emailInput = document.getElementById('userEmail');
       const datalist = document.getElementById('dbidSuggestions');
       const goBtn = document.getElementById('go');
       const clearBtn = document.getElementById('clear');
@@ -148,6 +149,31 @@
       const gcsLink = document.getElementById('gcsLink');
       const s3Link = document.getElementById('s3Link');
       const cppLink = document.getElementById('cppLink');
+      const ftpLink = document.getElementById('ftpLink');
+      const presetDbLookup = document.getElementById('presetDbLookup');
+      
+      // New logic for the iTerm Profile Download
+      const itermLink = document.getElementById('itermDownloadLink');
+      const itermProfile = {
+        "Profiles": [
+          {
+            "Name": "SFTP Handler",
+            "Guid": "sftp-handler-shared-profile",
+            "Custom Command": "Yes",
+            "Command": "bash -c \"if [ -z '$$USER$$' ]; then sftp $$HOST$$; else sftp $$USER$$@$$HOST$$; fi\"",
+            "Description": "Profile to handle ftp:// links via sftp",
+            "Tags": ["Protocol Handler"],
+            "Url Schemes": ["ftp"],
+            "Window Type": 0,
+            "Close Sessions On End": true
+          }
+        ]
+      };
+      // Create a Blob from the JSON and set it as the href
+      const blob = new Blob([JSON.stringify(itermProfile, null, 2)], {type: 'application/json'});
+      itermLink.href = URL.createObjectURL(blob);
+      itermLink.download = 'sftp-handler.json';
+
 
       function safeDbid(raw) {
         return String(raw || '').trim();
@@ -178,7 +204,6 @@
 
       function setLinks(dbid) {
         const encoded = encodeURIComponent(dbid);
-        // Get email from input, fallback to default if empty
         const currentEmail = emailInput.value.trim() || "first.last@neo4j.com";
         const encodedEmail = encodeURIComponent(currentEmail);
         
@@ -192,7 +217,6 @@
         const awsRole = 'HealthcheckSEAccess';
         const current_YYYYMMDD_date_str = new Date().toISOString().slice(0,10).replace(/-/g, ''); 
         
-        // Use the dynamic email here for S3 prefix
         const s3Prefix = `healthchecks/${currentEmail}/${dbid}/${current_YYYYMMDD_date_str}/`;
         const s3Url = `https://s3.console.aws.amazon.com/s3/buckets/cs-upload-bucket-prod?region=eu-west-1&prefix=${s3Prefix}&showversions=false`;
         s3Link.href = `https://d-92676bf303.awsapps.com/start/#/console?account_id=${awsAccount}&role_name=${awsRole}&destination=` + encodeURIComponent(s3Url);
@@ -243,15 +267,11 @@
       // Init Email
       emailInput.value = loadEmail();
       
-      // Set Focus on Email Input on Load
       emailInput.focus();
 
-      // If history exists, load links, otherwise just set default preset link
       if (history.length) {
         input.value = history[0];
         setLinks(history[0]);
-      } else {
-        // Initial setup for empty state if needed (though setLinks requires dbid)
       }
 
       // Events
@@ -271,16 +291,13 @@
         }
       });
       
-      // Email Events
       emailInput.addEventListener('change', () => {
           saveEmail();
-          // Update links immediately if a dbid is already present
           const dbid = safeDbid(input.value);
           if (dbid) {
               setLinks(dbid);
           }
       });
-      // Also save on keyup/input to be safe, but primarily 'change' for storage
       emailInput.addEventListener('input', () => {
          const dbid = safeDbid(input.value);
          if (dbid) {
