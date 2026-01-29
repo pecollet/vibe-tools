@@ -134,7 +134,7 @@
     </section>
   </main>
 
-  <script>
+<script>
     (function () {
       const STORAGE_KEY = 'dbidHistory.v2';
       const EMAIL_STORAGE_KEY = 'userEmail.v1';
@@ -145,10 +145,14 @@
       const datalist = document.getElementById('dbidSuggestions');
       const goBtn = document.getElementById('go');
       const clearBtn = document.getElementById('clear');
+      
+      // Elements that require DBID
       const sreLink = document.getElementById('sreLink');
       const gcsLink = document.getElementById('gcsLink');
       const s3Link = document.getElementById('s3Link');
       const cppLink = document.getElementById('cppLink');
+      
+      // Elements that ONLY require Email (or are static)
       const ftpLink = document.getElementById('ftpLink');
       const presetDbLookup = document.getElementById('presetDbLookup');
       
@@ -169,7 +173,6 @@
           }
         ]
       };
-      // Create a Blob from the JSON and set it as the href
       const blob = new Blob([JSON.stringify(itermProfile, null, 2)], {type: 'application/json'});
       itermLink.href = URL.createObjectURL(blob);
       itermLink.download = 'sftp-handler.json';
@@ -202,17 +205,41 @@
         });
       }
 
-      function setLinks(dbid) {
-        const encoded = encodeURIComponent(dbid);
+      function getEmailData() {
         const currentEmail = emailInput.value.trim() || "first.last@neo4j.com";
         const encodedEmail = encodeURIComponent(currentEmail);
-        
         const presetBase = `https://manage.app.preset.io/login/?email=${encodedEmail}&next=`;
+        return { currentEmail, encodedEmail, presetBase };
+      }
+
+      // 1. New function: Updates links that rely ONLY on email (no DBID needed)
+      function updateEmailOnlyLinks() {
+        const { currentEmail, encodedEmail, presetBase } = getEmailData();
+
+        // Preset DB Lookup (General Dashboard)
         presetDbLookup.href = presetBase + encodeURIComponent(`https://9d89c3b1.us2a.app.preset.io/superset/dashboard/29/?native_filters_key=2m6S656E0IcQzcp6pSM-PYU9qHZ3QamRvbQ4pGIoweA7X_inMGHDCSB6S-87Prwu&email=${encodedEmail}`);
+
+        // SFTP Link
+        ftpLink.href = `ftp://${currentEmail}@sftp.healthcheck.neo4j.com/`;
+      }
+
+      // 2. Refactored function: Updates links that Require DBID
+      function setLinks(dbid) {
+        if (!dbid) return; // Guard clause if dbid is missing
+
+        const encoded = encodeURIComponent(dbid);
+        const { currentEmail, presetBase } = getEmailData();
+        
+        // CPP Link (Specific to DBID)
         cppLink.href = presetBase + encodeURIComponent(`https://9d89c3b1.us2a.app.preset.io/superset/dashboard/p/lzBApO4EdL2/?native_filters=(NATIVE_FILTER-Fcf44qNKUQceF55VPxdkb:(extraFormData:(filters:!((col:dbid,op:IN,val:!(%27${encoded}%27)))),filterState:(label:%27${encoded}%27,validateStatus:!f,value:!(%27${encoded}%27),__cache:(value:!(%27${encoded}%27)))),NATIVE_FILTER-vn0Ss5nQldp9Nri8Jgldc:(filterState:(value:!()),scope:!((rootPath:!(),excluded:!())),extraFormData:()),NATIVE_FILTER-SFSwvGWyC9xyxRaaq0RyJ:(filterState:(value:!()),scope:!((rootPath:!(),excluded:!())),extraFormData:()))`);
 
+        // SRE Link
         sreLink.href = `https://sre.neo4j.io/databases/${encoded}/operations#operationsSection`;
+        
+        // GCS Link
         gcsLink.href = `https://console.cloud.google.com/storage/browser/production-aura-operations-utility-support/production/${encoded}/neo4j-admin-report;tab=objects?prefix=&forceOnObjectsSortingFiltering=false`;
+        
+        // S3 Link (Uses DBID + Email)
         const awsAccount = '158692621672';
         const awsRole = 'HealthcheckSEAccess';
         const current_YYYYMMDD_date_str = new Date().toISOString().slice(0,10).replace(/-/g, ''); 
@@ -220,8 +247,6 @@
         const s3Prefix = `healthchecks/${currentEmail}/${dbid}/${current_YYYYMMDD_date_str}/`;
         const s3Url = `https://s3.console.aws.amazon.com/s3/buckets/cs-upload-bucket-prod?region=eu-west-1&prefix=${s3Prefix}&showversions=false`;
         s3Link.href = `https://d-92676bf303.awsapps.com/start/#/console?account_id=${awsAccount}&role_name=${awsRole}&destination=` + encodeURIComponent(s3Url);
-
-        ftpLink.href = `ftp://${currentEmail}@sftp.healthcheck.neo4j.com/`;
       }
 
 
@@ -267,6 +292,9 @@
       // Init Email
       emailInput.value = loadEmail();
       
+      // Init Email-only links immediately (no DBID needed)
+      updateEmailOnlyLinks();
+      
       emailInput.focus();
 
       if (history.length) {
@@ -293,12 +321,14 @@
       
       emailInput.addEventListener('change', () => {
           saveEmail();
+          updateEmailOnlyLinks(); // Update email-specific links immediately
           const dbid = safeDbid(input.value);
           if (dbid) {
-              setLinks(dbid);
+              setLinks(dbid); // Update DBID links if DBID exists (since S3/CPP depend on email too)
           }
       });
       emailInput.addEventListener('input', () => {
+         updateEmailOnlyLinks(); // Live update as user types
          const dbid = safeDbid(input.value);
          if (dbid) {
              setLinks(dbid);
