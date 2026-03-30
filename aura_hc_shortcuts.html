@@ -106,7 +106,7 @@
     <section class="panel">
       <h2>Upload to the Health Check online service</h2>
       <div class="content" style="display:flex; flex-direction:column; gap:10px; padding:8px 0;">
-        <a class="btn" href="https://hc-aura-frontend.prod.cs-neo4j.com/" target="_blank" rel="noopener noreferrer">Neo4j Aura Health Check — Upload ↗</a>
+        <a id="hcAuraLink" class="btn" href="https://hc-aura-frontend.prod.cs-neo4j.com/" target="_blank" rel="noopener noreferrer">Neo4j Aura Health Check — Upload ↗</a>
       </div>
       <div class="content" style="display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap:16px; align-items:flex-start;">
         <div>
@@ -158,6 +158,7 @@
       // Elements that ONLY require Email (or are static)
       const ftpLink = document.getElementById('ftpLink');
       const presetDbLookup = document.getElementById('presetDbLookup');
+      const hcAuraLink = document.getElementById('hcAuraLink');
       
       // New logic for the iTerm Profile Download
       const itermLink = document.getElementById('itermDownloadLink');
@@ -250,6 +251,9 @@
         const s3Prefix = `healthchecks/${currentEmail}/${dbid}/${current_YYYYMMDD_date_str}/`;
         const s3Url = `https://s3.console.aws.amazon.com/s3/buckets/cs-upload-bucket-prod?region=eu-west-1&prefix=${s3Prefix}&showversions=false`;
         s3Link.href = `https://d-92676bf303.awsapps.com/start/#/console?account_id=${awsAccount}&role_name=${awsRole}&destination=` + encodeURIComponent(s3Url);
+
+        // HC Aura link with dbid in query
+        hcAuraLink.href = `https://hc-aura-frontend.prod.cs-neo4j.com/?dbid=${encoded}`;
       }
 
 
