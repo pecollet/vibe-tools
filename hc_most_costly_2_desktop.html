@@ -1775,7 +1775,7 @@
             const targetLabel = info.target;
             if (count > 0 && sourceLabel && targetLabel) {
               const props = info.properties || [];
-              let createStmt = `MATCH (s:${sourceLabel}), (t:${targetLabel})\n\tWITH s, t ORDER BY rand() LIMIT 1\n\tCREATE (s)-[r:${type}]->(t)`;
+              let createStmt = `MERGE (s)-[r:${type}]->(t)`;
               if (props.length > 0) {
                 const setAssignments = props.map(p => {
                   const value = generateValueExpression(p);
@@ -1784,7 +1784,17 @@
                 createStmt += `\n\tSET ${setAssignments.join(', ')}`;
               }
               
-              const batched = `UNWIND range(1, ${count}) AS i\nCALL (i) {\n\t${createStmt}\n} IN TRANSACTIONS OF 1000 ROWS`;
+              const batched = `MATCH (s:${sourceLabel})
+WITH COLLECT(s.synthetic_id) as s_ids
+MATCH (t:${targetLabel})
+WITH s_ids,  COLLECT(t.synthetic_id) as t_ids
+UNWIND range(1, ${count}) AS i
+CALL (s_ids, t_ids) {
+    WITH s_ids[toInteger(rand() * size(s_ids))] as s_id, t_ids[toInteger(rand() * size(t_ids))] as t_id
+    MATCH (s:${sourceLabel}{synthetic_id: s_id})
+    MATCH (t:${targetLabel}{synthetic_id: t_id})
+	${createStmt}
+} IN TRANSACTIONS OF 1000 ROWS`;
               statements.push(batched);
             }
           }
@@ -1795,7 +1805,7 @@
           const targetLabel = infos.target;
           if (count > 0 && sourceLabel && targetLabel) {
             const props = infos.properties || [];
-            let createStmt = `MATCH (s:${sourceLabel}), (t:${targetLabel})\n\tWITH s, t ORDER BY rand() LIMIT 1\n\tCREATE (s)-[r:${type}]->(t)`;
+            let createStmt = `MERGE (s)-[r:${type}]->(t)`;
             if (props.length > 0) {
               const setAssignments = props.map(p => {
                 const value = generateValueExpression(p);
@@ -1804,7 +1814,17 @@
               createStmt += `\n\tSET ${setAssignments.join(', ')}`;
             }
             
-            const batched = `UNWIND range(1, ${count}) AS i\nCALL (i) {\n\t${createStmt}\n} IN TRANSACTIONS OF 1000 ROWS`;
+            const batched = `MATCH (s:${sourceLabel})
+WITH COLLECT(s.synthetic_id) as s_ids
+MATCH (t:${targetLabel})
+WITH s_ids,  COLLECT(t.synthetic_id) as t_ids
+UNWIND range(1, ${count}) AS i
+CALL (s_ids, t_ids) {
+    WITH s_ids[toInteger(rand() * size(s_ids))] as s_id, t_ids[toInteger(rand() * size(t_ids))] as t_id
+    MATCH (s:${sourceLabel}{synthetic_id: s_id})
+    MATCH (t:${targetLabel}{synthetic_id: t_id})
+	${createStmt}
+} IN TRANSACTIONS OF 1000 ROWS`;
             statements.push(batched);
           }
         }
