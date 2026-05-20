@@ -1568,9 +1568,11 @@
       }
       
       const statements = [];
+
       
       // Generate index statements first
       for (const [label, info] of Object.entries(config.nodeLabels)) {
+        statements.push(`CREATE INDEX idx_${label}_synthetic_id IF NOT EXISTS FOR (n:${label}) ON (n.synthetic_id)`);
         for (const prop of info.properties) {
           if (prop.index) {
             statements.push(`CREATE INDEX idx_${label}_${prop.key} IF NOT EXISTS FOR (n:${label}) ON (n.${prop.key})`);
@@ -1587,14 +1589,7 @@
               }
             }
           }
-        } else {
-          // Legacy single object format
-          for (const prop of infos.properties) {
-            if (prop.index) {
-              statements.push(`CREATE idx_${type}_${prop.key} IF NOT EXISTS INDEX FOR ()-[r:${type}]-() ON (r.${prop.key})`);
-            }
-          }
-        }
+        } 
       }
       
       function generateValueExpression(propConfig) {
@@ -1757,7 +1752,7 @@
         const count = info.count;
         if (count > 0) {
           const props = info.properties || [];
-          let createStmt = `CREATE (n:${label})`;
+          let createStmt = `MERGE (n:${label} {synthetic_id: randomUUID()})`;
           if (props.length > 0) {
             const setAssignments = props.map(p => {
               const value = generateValueExpression(p);
@@ -1766,7 +1761,7 @@
             createStmt += `\n\t\tSET ${setAssignments.join(', ')}`;
           }
           
-          const batched = `UNWIND range(1, ${count}) AS i\nCALL {\n\t\t${createStmt}\n} IN CONCURRENT TRANSACTIONS OF 1000 ROWS`;
+          const batched = `UNWIND range(1, ${count}) AS i\nCALL (i) {\n\t\t${createStmt}\n} IN CONCURRENT TRANSACTIONS OF 1000 ROWS`;
           statements.push(batched);
         }
       }
@@ -1789,7 +1784,7 @@
                 createStmt += `\n\tSET ${setAssignments.join(', ')}`;
               }
               
-              const batched = `UNWIND range(1, ${count}) AS i\nCALL {\n\t${createStmt}\n} IN TRANSACTIONS OF 1000 ROWS`;
+              const batched = `UNWIND range(1, ${count}) AS i\nCALL (i) {\n\t${createStmt}\n} IN TRANSACTIONS OF 1000 ROWS`;
               statements.push(batched);
             }
           }
@@ -1809,7 +1804,7 @@
               createStmt += `\n\tSET ${setAssignments.join(', ')}`;
             }
             
-            const batched = `UNWIND range(1, ${count}) AS i\nCALL {\n\t${createStmt}\n} IN TRANSACTIONS OF 1000 ROWS`;
+            const batched = `UNWIND range(1, ${count}) AS i\nCALL (i) {\n\t${createStmt}\n} IN TRANSACTIONS OF 1000 ROWS`;
             statements.push(batched);
           }
         }
