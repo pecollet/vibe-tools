@@ -1,0 +1,1388 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Doppelgrapher — Synthetic Neo4j graph from graph statistics</title>
+  <style>
+    :root {
+      --bg: #0b1020;
+      --panel: #121a33;
+      --panel-2: #0f1730;
+      --text: #e8eeff;
+      --muted: #a9b4d6;
+      --border: rgba(255,255,255,0.14);
+      --accent: #6aa8ff;
+      --good: #2de39c;
+      --bad: #ff5c7a;
+      --warn: #ffc46a;
+    }
+
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+      background: radial-gradient(1200px 800px at 20% 0%, #15224a 0%, var(--bg) 60%);
+      color: var(--text);
+    }
+
+    .wrap {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 28px 18px 40px;
+    }
+
+    h1 {
+      font-size: 22px;
+      margin: 0 0 4px;
+      letter-spacing: 0.2px;
+      font-weight: 700;
+    }
+
+    .subtitle { color: var(--muted); font-size: 13px; margin: 0 0 18px; }
+
+    .row { display: grid; grid-template-columns: 1fr; gap: 14px; }
+
+    .card {
+      background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02));
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 16px;
+      box-shadow: 0 12px 30px rgba(0,0,0,0.35);
+      transition: opacity 200ms ease;
+    }
+
+    .card.locked { opacity: 0.45; pointer-events: none; }
+
+    .card h2 {
+      font-size: 15px;
+      margin: 0 0 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .step-num {
+      display: inline-grid;
+      place-items: center;
+      width: 24px; height: 24px;
+      border-radius: 50%;
+      background: rgba(106,168,255,0.18);
+      border: 1px solid rgba(106,168,255,0.4);
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .ok-mark { font-size: 15px; }
+
+    .muted { color: var(--muted); font-size: 13px; }
+
+    button {
+      background: rgba(255,255,255,0.06);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 10px 14px;
+      border-radius: 12px;
+      cursor: pointer;
+      font-weight: 600;
+      transition: transform 120ms ease, background 120ms ease;
+    }
+
+    button:hover { transform: translateY(-1px); background: rgba(255,255,255,0.09); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+    button.primary {
+      background: rgba(106,168,255,0.2);
+      border-color: rgba(106,168,255,0.5);
+    }
+    button.primary:hover { background: rgba(106,168,255,0.3); }
+
+    .dropzone {
+      display: grid;
+      place-items: center;
+      padding: 28px;
+      background: linear-gradient(180deg, rgba(106,168,255,0.10), rgba(255,255,255,0.02));
+      border: 2px dashed rgba(106,168,255,0.45);
+      border-radius: 18px;
+      text-align: center;
+      user-select: none;
+      cursor: pointer;
+    }
+
+    .dropzone.dragover {
+      border-color: rgba(45,227,156,0.8);
+      background: linear-gradient(180deg, rgba(45,227,156,0.14), rgba(255,255,255,0.02));
+    }
+
+    .dropzone strong { color: var(--accent); }
+
+    .status {
+      margin-top: 10px;
+      font-size: 13px;
+      color: var(--muted);
+      min-height: 18px;
+    }
+    .status.good { color: var(--good); }
+    .status.bad { color: var(--bad); }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,0.05);
+      font-size: 12px;
+      color: var(--muted);
+      margin: 3px 6px 3px 0;
+    }
+    .pill b { color: var(--text); font-size: 13px; }
+
+    .warnbox {
+      margin-top: 10px;
+      border: 1px solid rgba(255,196,106,0.4);
+      background: rgba(255,196,106,0.08);
+      border-radius: 12px;
+      padding: 10px 12px;
+      font-size: 13px;
+      color: var(--warn);
+    }
+    .warnbox ul { margin: 6px 0 0; padding-left: 20px; }
+    .warnbox li { margin: 3px 0; color: var(--text); }
+
+    .infobox {
+      margin-top: 10px;
+      border: 1px solid rgba(106,168,255,0.35);
+      background: rgba(106,168,255,0.07);
+      border-radius: 12px;
+      padding: 10px 12px;
+      font-size: 13px;
+      color: var(--accent);
+    }
+    .infobox ul { margin: 6px 0 0; padding-left: 20px; }
+    .infobox li { margin: 3px 0; color: var(--text); }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: 2fr 1fr 1fr 1fr auto;
+      gap: 10px;
+      align-items: end;
+    }
+    @media (max-width: 800px) { .form-grid { grid-template-columns: 1fr; } }
+
+    label.field { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--muted); }
+
+    input[type="text"], input[type="password"] {
+      background: rgba(0,0,0,0.25);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 10px 12px;
+      border-radius: 10px;
+      font-size: 13px;
+      font-family: inherit;
+    }
+    input[type="text"]:focus, input[type="password"]:focus { outline: 1px solid var(--accent); }
+
+    .slider-zone { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin: 6px 0 14px; }
+    .slider-zone input[type="range"] { flex: 1; min-width: 220px; accent-color: var(--accent); }
+    .scale-readout {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--accent);
+      min-width: 130px;
+    }
+
+    details.tree-root {
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: rgba(0,0,0,0.12);
+      padding: 0;
+      margin-bottom: 14px;
+      overflow: hidden;
+    }
+    details.tree-root > summary {
+      cursor: pointer;
+      padding: 10px 14px;
+      font-weight: 700;
+      color: var(--muted);
+      background: rgba(18,26,51,0.95);
+      user-select: none;
+    }
+    .tree { padding: 10px 12px 12px; }
+
+    details.tree-group { margin: 4px 0; border-left: 2px solid rgba(255,255,255,0.08); }
+    details.tree-group > summary {
+      cursor: pointer;
+      padding: 6px 8px;
+      font-weight: 600;
+      user-select: none;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border-radius: 8px;
+    }
+    details.tree-group > summary:hover { background: rgba(255,255,255,0.04); }
+    .group-count { color: var(--muted); font-weight: 400; font-size: 12px; }
+
+    .tree-item {
+      margin: 6px 0 10px 28px;
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 8px;
+      align-items: start;
+    }
+    .tree-item .item-head { grid-column: 1 / 3; display: flex; align-items: center; gap: 8px; font-size: 13px; }
+    .tree-item .item-name { font-weight: 600; }
+    .tree-item .item-meta { color: var(--muted); font-size: 12px; }
+    .tree-item .item-note { color: var(--warn); font-size: 12px; }
+    .tree-item textarea {
+      grid-column: 1 / 3;
+      width: 100%;
+      box-sizing: border-box;
+      background: rgba(0,0,0,0.3);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 10px;
+      padding: 8px 10px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 12px;
+      line-height: 1.45;
+      resize: vertical;
+      white-space: pre;
+      overflow-x: auto;
+    }
+    .tree-item textarea:focus { outline: 1px solid var(--accent); }
+    .tree-item textarea.edited { border-color: rgba(255,196,106,0.5); }
+
+    input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px; cursor: pointer; }
+
+    .progress-zone { margin-top: 14px; display: none; }
+    .progress-zone.visible { display: block; }
+
+    .progress-row {
+      display: grid;
+      grid-template-columns: 240px 1fr 90px;
+      gap: 10px;
+      align-items: center;
+      margin: 6px 0;
+      font-size: 13px;
+    }
+    @media (max-width: 700px) { .progress-row { grid-template-columns: 1fr; } }
+    .progress-row .p-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .progress-row .p-status { text-align: right; color: var(--muted); font-size: 12px; white-space: nowrap; }
+    .progress-row .p-status.good { color: var(--good); }
+    .progress-row .p-status.bad { color: var(--bad); }
+
+    .progress {
+      height: 10px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.08);
+      border: 1px solid var(--border);
+      overflow: hidden;
+    }
+    .progress .bar {
+      height: 100%;
+      width: 0%;
+      border-radius: 999px;
+      background: linear-gradient(90deg, #4a86e0, var(--accent));
+      transition: width 250ms ease;
+    }
+    .progress .bar.done { background: linear-gradient(90deg, #17b57c, var(--good)); }
+    .progress .bar.failed { background: linear-gradient(90deg, #d0405d, var(--bad)); }
+    .progress .bar.indeterminate {
+      width: 30% !important;
+      animation: slide 1.2s ease-in-out infinite alternate;
+    }
+    @keyframes slide {
+      from { margin-left: 0; }
+      to { margin-left: 70%; }
+    }
+
+    .log {
+      margin-top: 12px;
+      max-height: 260px;
+      overflow: auto;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: rgba(0,0,0,0.25);
+      padding: 10px 12px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 12px;
+      line-height: 1.5;
+      display: none;
+    }
+    .log.visible { display: block; }
+    .log .l-ok { color: var(--good); }
+    .log .l-err { color: var(--bad); }
+    .log .l-warn { color: var(--warn); }
+    .log .l-info { color: var(--muted); }
+
+    .btns { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .diag { margin-top: 8px; font-size: 11px; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Doppelgrapher</h1>
+    <p class="subtitle">Generate a synthetic Neo4j graph that reproduces the shape (labels, types, counts, properties, indexes &amp; constraints) of a source graph, from Health Check statistics — without any of the original data.</p>
+
+    <div class="row">
+
+      <!-- ============ Section 1: File drop zone ============ -->
+      <section class="card" id="section1">
+        <h2><span class="step-num">1</span> Source statistics <span class="ok-mark" id="s1ok"></span></h2>
+        <div class="dropzone" id="dropzone">
+          <div>
+            <div><strong>Drop a Health Check report (.zip)</strong> here, or click to browse.</div>
+            <div class="muted" style="margin-top:6px;">Also accepts <code>hc.db</code> (SQLite) directly, or a <code>model_json</code> file (.json).</div>
+          </div>
+          <input type="file" id="fileInput" accept=".zip,.db,.sqlite,.json" style="display:none" />
+        </div>
+        <div class="status" id="fileStatus"></div>
+        <div id="analysisZone"></div>
+        <div class="diag" id="diag"></div>
+      </section>
+
+      <!-- ============ Section 2: Target Neo4j db ============ -->
+      <section class="card locked" id="section2">
+        <h2><span class="step-num">2</span> Target Neo4j database <span class="ok-mark" id="s2ok"></span></h2>
+        <div class="form-grid">
+          <label class="field">Neo4j URL
+            <input type="text" id="neo4jUrl" placeholder="neo4j://localhost:7687" autocomplete="off" />
+          </label>
+          <label class="field">User
+            <input type="text" id="neo4jUser" value="neo4j" autocomplete="off" />
+          </label>
+          <label class="field">Database name
+            <input type="text" id="neo4jDatabase" value="neo4j" autocomplete="off" />
+          </label>
+          <label class="field">Password
+            <input type="password" id="neo4jPassword" placeholder="••••••••" autocomplete="off" />
+          </label>
+          <button id="btnConnect" class="primary">Check connectivity</button>
+        </div>
+        <div class="status" id="connStatus"></div>
+      </section>
+
+      <!-- ============ Section 3: Generation & ingestion ============ -->
+      <section class="card locked" id="section3">
+        <h2><span class="step-num">3</span> Synthetic data generation &amp; ingestion</h2>
+
+        <div class="muted">Scale of the load (100% = counts reported in the source statistics):</div>
+        <div class="slider-zone">
+          <input type="range" id="scaleSlider" min="0" max="200" step="1" value="100" />
+          <span class="scale-readout" id="scaleReadout">100% (×1.00)</span>
+        </div>
+
+        <details class="tree-root" id="detailsTree">
+          <summary>Details — generated Cypher (editable, uncheck to exclude)</summary>
+          <div class="tree" id="tree"></div>
+        </details>
+
+        <div class="btns">
+          <button id="btnIngest" class="primary">Ingest</button>
+          <button id="btnStop" disabled>Stop</button>
+          <span class="muted" id="ingestSummary"></span>
+        </div>
+
+        <div class="progress-zone" id="progressZone"></div>
+        <div class="log" id="log"></div>
+      </section>
+
+    </div>
+  </div>
+
+  <script>
+    'use strict';
+
+    // ---------------------------
+    // DOM references
+    // ---------------------------
+    const elDropzone = document.getElementById('dropzone');
+    const elFileInput = document.getElementById('fileInput');
+    const elFileStatus = document.getElementById('fileStatus');
+    const elAnalysisZone = document.getElementById('analysisZone');
+    const elDiag = document.getElementById('diag');
+    const elS1Ok = document.getElementById('s1ok');
+    const elS2Ok = document.getElementById('s2ok');
+    const elSection2 = document.getElementById('section2');
+    const elSection3 = document.getElementById('section3');
+    const elUrl = document.getElementById('neo4jUrl');
+    const elUser = document.getElementById('neo4jUser');
+    const elDatabase = document.getElementById('neo4jDatabase');
+    const elPassword = document.getElementById('neo4jPassword');
+    const elBtnConnect = document.getElementById('btnConnect');
+    const elConnStatus = document.getElementById('connStatus');
+    const elScaleSlider = document.getElementById('scaleSlider');
+    const elScaleReadout = document.getElementById('scaleReadout');
+    const elTree = document.getElementById('tree');
+    const elBtnIngest = document.getElementById('btnIngest');
+    const elBtnStop = document.getElementById('btnStop');
+    const elIngestSummary = document.getElementById('ingestSummary');
+    const elProgressZone = document.getElementById('progressZone');
+    const elLog = document.getElementById('log');
+
+    // ---------------------------
+    // State
+    // ---------------------------
+    let model = null;                 // parsed model_json
+    let hcCreateStatements = [];      // statements from db_vars.indexes_create_statements (LOOKUPs filtered out)
+    let plan = null;                  // { constraints: [], indexes: [], nodes: [], rels: [] } of plan items
+    let driver = null;                // neo4j driver instance
+    let ingesting = false;
+    let stopRequested = false;
+
+    const LS_URL = 'doppelgrapher.neo4jUrl';
+    const LS_USER = 'doppelgrapher.neo4jUser';
+    const LS_DATABASE = 'doppelgrapher.neo4jDatabase';
+
+    // ---------------------------
+    // Script loader with fallbacks (same model as other tools in this repo)
+    // ---------------------------
+    function loadScript(url) {
+      return new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = url;
+        s.async = true;
+        s.onload = () => resolve(url);
+        s.onerror = () => reject(new Error(`Failed to load script: ${url}`));
+        document.head.appendChild(s);
+      });
+    }
+
+    async function ensureLib(globalName, candidates) {
+      if (window[globalName]) return window[globalName];
+      let lastErr = null;
+      for (const url of candidates) {
+        try {
+          await loadScript(url);
+          if (window[globalName]) return window[globalName];
+        } catch (e) { lastErr = e; }
+      }
+      throw lastErr || new Error(`${globalName} did not load.`);
+    }
+
+    const ensureJSZip = () => ensureLib('JSZip', [
+      'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js',
+      'https://unpkg.com/jszip@3.10.1/dist/jszip.min.js',
+      'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js'
+    ]);
+
+    const ensureSqlJs = () => ensureLib('initSqlJs', [
+      'https://sql.js.org/dist/sql-wasm.js',
+      'https://cdn.jsdelivr.net/npm/sql.js@1.11.0/dist/sql-wasm.js',
+      'https://unpkg.com/sql.js@1.11.0/dist/sql-wasm.js'
+    ]);
+
+    const ensureNeo4j = () => ensureLib('neo4j', [
+      'https://cdn.jsdelivr.net/npm/neo4j-driver@5.28.1/lib/browser/neo4j-web.min.js',
+      'https://unpkg.com/neo4j-driver@5.28.1/lib/browser/neo4j-web.min.js'
+    ]);
+
+    async function initSqlJsOnce() {
+      if (window.__sqljs) return window.__sqljs;
+      const init = await ensureSqlJs();
+      const SQL = await init({ locateFile: (file) => `https://sql.js.org/dist/${file}` });
+      window.__sqljs = SQL;
+      return SQL;
+    }
+
+    // ---------------------------
+    // Helpers
+    // ---------------------------
+    function setStatus(el, msg, cls) {
+      el.textContent = msg;
+      el.className = 'status' + (cls ? ' ' + cls : '');
+    }
+
+    function fmt(n) {
+      return (n === null || n === undefined) ? '?' : Number(n).toLocaleString('en-US');
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+
+    // Backtick-quote a label / type / property key when needed.
+    function ident(name) {
+      if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return name;
+      return '`' + String(name).replace(/`/g, '``') + '`';
+    }
+
+    function scaleFactor() {
+      return Number(elScaleSlider.value) / 100;
+    }
+
+    function scaled(count) {
+      if (count === null || count === undefined) return 0;
+      return Math.round(count * scaleFactor());
+    }
+
+    // ---------------------------
+    // Section 1: file handling
+    // ---------------------------
+    elDropzone.addEventListener('click', () => elFileInput.click());
+    elFileInput.addEventListener('change', (e) => {
+      const f = e.target.files && e.target.files[0];
+      if (f) handleFile(f);
+      elFileInput.value = '';
+    });
+    ['dragover', 'dragenter'].forEach(ev => elDropzone.addEventListener(ev, (e) => {
+      e.preventDefault();
+      elDropzone.classList.add('dragover');
+    }));
+    ['dragleave', 'drop'].forEach(ev => elDropzone.addEventListener(ev, (e) => {
+      e.preventDefault();
+      elDropzone.classList.remove('dragover');
+    }));
+    elDropzone.addEventListener('drop', (e) => {
+      const f = e.dataTransfer.files && e.dataTransfer.files[0];
+      if (f) handleFile(f);
+    });
+
+    async function handleFile(file) {
+      try {
+        setStatus(elFileStatus, `Loading ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)…`);
+        elS1Ok.textContent = '';
+        elAnalysisZone.innerHTML = '';
+        model = null;
+        hcCreateStatements = [];
+
+        const name = file.name.toLowerCase();
+        if (name.endsWith('.json')) {
+          const text = await file.text();
+          model = JSON.parse(text);
+          hcCreateStatements = [];
+        } else if (name.endsWith('.db') || name.endsWith('.sqlite')) {
+          const bytes = new Uint8Array(await file.arrayBuffer());
+          await readFromSqlite(bytes);
+        } else {
+          // assume zip
+          await ensureJSZip();
+          const zip = await window.JSZip.loadAsync(await file.arrayBuffer());
+          let dbEntry = null;
+          zip.forEach((relativePath, entry) => {
+            const p = (relativePath || '').toLowerCase();
+            if (!dbEntry && entry && !entry.dir && (p === 'hc.db' || p.endsWith('/hc.db'))) dbEntry = entry;
+          });
+          if (!dbEntry) throw new Error('Could not find hc.db inside the zip.');
+          const bytes = new Uint8Array(await dbEntry.async('arraybuffer'));
+          await readFromSqlite(bytes);
+        }
+
+        if (!model || typeof model !== 'object' || !model.nodeLabels || !model.relationshipTypes) {
+          throw new Error('Data found but it is not a valid model (expected "nodeLabels" and "relationshipTypes").');
+        }
+
+        elS1Ok.textContent = '✅';
+        setStatus(elFileStatus, `Valid statistics loaded from ${file.name}.`, 'good');
+        renderAnalysis(analyzeModel());
+        elSection2.classList.remove('locked');
+        rebuildPlan();
+      } catch (err) {
+        console.error(err);
+        model = null;
+        elS1Ok.textContent = '';
+        setStatus(elFileStatus, `Error: ${err && err.message ? err.message : err}`, 'bad');
+        elSection2.classList.add('locked');
+        elSection3.classList.add('locked');
+      }
+    }
+
+    async function readFromSqlite(bytes) {
+      const SQL = await initSqlJsOnce();
+      const db = new SQL.Database(bytes);
+      try {
+        const modelRes = db.exec("SELECT value FROM global_vars WHERE key='model_json' LIMIT 1");
+        if (!(modelRes && modelRes.length && modelRes[0].values && modelRes[0].values.length)) {
+          throw new Error('No model_json found in hc.db (global_vars). The report may predate version 2026.08.');
+        }
+        model = JSON.parse(String(modelRes[0].values[0][0]));
+
+        // Index & constraint creation statements (indexes and index-backed key/uniqueness constraints).
+        hcCreateStatements = [];
+        try {
+          const stmtsRes = db.exec("SELECT value FROM db_vars WHERE key='indexes_create_statements' LIMIT 1");
+          if (stmtsRes && stmtsRes.length && stmtsRes[0].values && stmtsRes[0].values.length) {
+            const raw = String(stmtsRes[0].values[0][0] || '');
+            hcCreateStatements = raw
+              .split(';')
+              .map(s => s.trim())
+              .filter(s => s.length > 0)
+              .filter(s => !/\bLOOKUP\b/i.test(s));   // filter out default LOOKUP indexes
+          }
+        } catch (e) {
+          console.warn('Could not read indexes_create_statements:', e);
+        }
+      } finally {
+        db.close();
+      }
+    }
+
+    // ---------------------------
+    // Statistics analysis
+    // ---------------------------
+
+    // Effective source/target labels for a relationship type: use inferred label
+    // constraints when present, else the observed labels.
+    function effectiveLabels(rel, side) {
+      const constrained = side === 'source' ? rel.constrainedSourceNodeLabels : rel.constrainedTargetNodeLabels;
+      const observed = side === 'source' ? rel.sourceNodeLabels : rel.targetNodeLabels;
+      if (Array.isArray(constrained) && constrained.length > 0) return constrained;
+      return Array.isArray(observed) ? observed : [];
+    }
+
+    function analyzeModel() {
+      const labels = Object.keys(model.nodeLabels || {});
+      const relTypes = Object.keys(model.relationshipTypes || {});
+
+      // Index / constraint counts: prefer the actual create statements from hc.db,
+      // fall back to counting from the model's property metadata.
+      let indexCount, constraintCount;
+      if (hcCreateStatements.length > 0) {
+        constraintCount = hcCreateStatements.filter(s => /CREATE\s+CONSTRAINT/i.test(s)).length;
+        indexCount = hcCreateStatements.length - constraintCount;
+      } else {
+        indexCount = 0;
+        constraintCount = 0;
+        const countProps = (entity) => {
+          for (const p of (entity.properties || [])) {
+            if (Array.isArray(p.indexTypes) && p.indexTypes.length) indexCount += p.indexTypes.length;
+            if (Array.isArray(p.constraintTypes) && p.constraintTypes.length) constraintCount += p.constraintTypes.length;
+          }
+        };
+        Object.values(model.nodeLabels || {}).forEach(countProps);
+        Object.values(model.relationshipTypes || {}).forEach(countProps);
+      }
+
+      const warnings = [];
+      const infos = [];
+
+      // --- Multi-labelled nodes ---
+      const multiLabelled = labels.filter(l => {
+        const implied = model.nodeLabels[l].impliedLabels;
+        return Array.isArray(implied) && implied.length > 0;
+      });
+      if (multiLabelled.length > 0) {
+        warnings.push('Multi-labelled nodes detected (the generator only creates single-labelled nodes, so node/relationship counts may be inflated): '
+          + multiLabelled.map(l => `:${l} also has [${model.nodeLabels[l].impliedLabels.join(', ')}]`).join(' ; '));
+      }
+
+      // Infer label overlaps from relationship counts: total per type vs sum of per-label counts.
+      for (const t of relTypes) {
+        const rel = model.relationshipTypes[t];
+        if (rel.count === null || rel.count === undefined) continue;
+        const srcSum = (rel.sourceLabelCounts || []).reduce((a, x) => a + (x.count || 0), 0);
+        const tgtSum = (rel.targetLabelCounts || []).reduce((a, x) => a + (x.count || 0), 0);
+        if ((rel.sourceLabelCounts || []).length > 1 && srcSum > rel.count) {
+          warnings.push(`Source labels of :${t} likely overlap (sum of per-label counts ${fmt(srcSum)} > relationship count ${fmt(rel.count)}): ` +
+            rel.sourceLabelCounts.map(x => `${x.label} (${fmt(x.count)})`).join(', '));
+        }
+        if ((rel.targetLabelCounts || []).length > 1 && tgtSum > rel.count) {
+          warnings.push(`Target labels of :${t} likely overlap (sum of per-label counts ${fmt(tgtSum)} > relationship count ${fmt(rel.count)}): ` +
+            rel.targetLabelCounts.map(x => `${x.label} (${fmt(x.count)})`).join(', '));
+        }
+      }
+
+      // --- Ambiguous relationships: >1 potential source label AND >1 potential target label ---
+      const ambiguous = [];
+      for (const t of relTypes) {
+        const rel = model.relationshipTypes[t];
+        const src = effectiveLabels(rel, 'source');
+        const tgt = effectiveLabels(rel, 'target');
+        if (src.length > 1 && tgt.length > 1) ambiguous.push(`:${t} (sources: ${src.join(', ')} / targets: ${tgt.join(', ')})`);
+        const usedConstraint = (Array.isArray(rel.constrainedSourceNodeLabels) && rel.constrainedSourceNodeLabels.length > 0)
+          || (Array.isArray(rel.constrainedTargetNodeLabels) && rel.constrainedTargetNodeLabels.length > 0);
+        if (usedConstraint) infos.push(`:${t} — using inferred label constraint(s) to narrow down source/target labels.`);
+      }
+      if (ambiguous.length > 0) {
+        warnings.push('Ambiguous relationship types (several possible source labels AND several possible target labels — source/target picks will be randomized by weight): ' + ambiguous.join(' ; '));
+      }
+
+      const nullCountLabels = labels.filter(l => model.nodeLabels[l].count === null || model.nodeLabels[l].count === undefined);
+      const nullCountRels = relTypes.filter(t => model.relationshipTypes[t].count === null || model.relationshipTypes[t].count === undefined);
+      if (nullCountLabels.length || nullCountRels.length) {
+        infos.push('No count available (seen in query logs only, excluded from generation by default): '
+          + [...nullCountLabels.map(l => ':' + l), ...nullCountRels.map(t => ':' + t)].join(', '));
+      }
+
+      const totalNodes = labels.reduce((a, l) => a + (model.nodeLabels[l].count || 0), 0);
+      const totalRels = relTypes.reduce((a, t) => a + (model.relationshipTypes[t].count || 0), 0);
+
+      return { labels, relTypes, indexCount, constraintCount, totalNodes, totalRels, warnings, infos };
+    }
+
+    function renderAnalysis(a) {
+      let html = '<div style="margin-top:12px;">';
+      html += `<span class="pill">Node labels <b>${a.labels.length}</b></span>`;
+      html += `<span class="pill">Relationship types <b>${a.relTypes.length}</b></span>`;
+      html += `<span class="pill">Indexes <b>${a.indexCount}</b></span>`;
+      html += `<span class="pill">Constraints <b>${a.constraintCount}</b></span>`;
+      html += `<span class="pill">Total nodes <b>${fmt(a.totalNodes)}</b></span>`;
+      html += `<span class="pill">Total relationships <b>${fmt(a.totalRels)}</b></span>`;
+      html += '</div>';
+      if (a.warnings.length) {
+        html += '<div class="warnbox">⚠️ Warnings<ul>' + a.warnings.map(w => `<li>${escapeHtml(w)}</li>`).join('') + '</ul></div>';
+      }
+      if (a.infos.length) {
+        html += '<div class="infobox">ℹ️ Notes<ul>' + a.infos.map(w => `<li>${escapeHtml(w)}</li>`).join('') + '</ul></div>';
+      }
+      elAnalysisZone.innerHTML = html;
+    }
+
+    // ---------------------------
+    // Section 2: connectivity
+    // ---------------------------
+    (function loadSaved() {
+      const url = localStorage.getItem(LS_URL);
+      const user = localStorage.getItem(LS_USER);
+      const database = localStorage.getItem(LS_DATABASE);
+      if (url) elUrl.value = url;
+      if (user) elUser.value = user;
+      if (database) elDatabase.value = database;
+    })();
+
+    function targetDatabase() {
+      return elDatabase.value.trim() || 'neo4j';
+    }
+
+    elBtnConnect.addEventListener('click', async () => {
+      const url = elUrl.value.trim();
+      const user = elUser.value.trim() || 'neo4j';
+      const database = targetDatabase();
+      const password = elPassword.value;
+      if (!url) { setStatus(elConnStatus, 'Please provide a Neo4j URL.', 'bad'); return; }
+
+      elBtnConnect.disabled = true;
+      elS2Ok.textContent = '';
+      setStatus(elConnStatus, 'Connecting…');
+      try {
+        const neo4j = await ensureNeo4j();
+        if (driver) { try { await driver.close(); } catch (e) { /* ignore */ } }
+        driver = neo4j.driver(url, neo4j.auth.basic(user, password));
+        const info = await driver.verifyConnectivity({ database });
+        elS2Ok.textContent = '✅';
+        setStatus(elConnStatus, `Connected to ${info.address}, database "${database}" (${info.agent}, protocol ${info.protocolVersion}).`, 'good');
+        localStorage.setItem(LS_URL, url);
+        localStorage.setItem(LS_USER, user);
+        localStorage.setItem(LS_DATABASE, database);
+        elSection3.classList.remove('locked');
+      } catch (err) {
+        console.error(err);
+        driver = null;
+        setStatus(elConnStatus, `Connection failed: ${err && err.message ? err.message : err}`, 'bad');
+        elSection3.classList.add('locked');
+      } finally {
+        elBtnConnect.disabled = false;
+      }
+    });
+
+    // ---------------------------
+    // Value generation (Cypher expressions)
+    // ---------------------------
+    function isUniqueProp(prop) {
+      return (prop.constraintTypes || []).some(c => /unique|key/i.test(String(c)));
+    }
+
+    function normalizeType(t) {
+      const s = String(t || '').toLowerCase();
+      if (!s || s === '?' || s === 'unknown') return 'string';
+      if (s.includes('string') || s.includes('text')) return 'string';
+      if (s.includes('bool')) return 'boolean';
+      if (s.includes('float') || s.includes('double')) return 'float';
+      if (s.includes('int') || s.includes('long') || s.includes('number')) return 'integer';
+      if (s === 'datetime' || s.includes('zoneddatetime') || s.includes('date_time')) return 'datetime';
+      if (s.includes('localdatetime')) return 'localdatetime';
+      if (s.includes('localtime')) return 'localtime';
+      if (s === 'time' || s.includes('zonedtime')) return 'time';
+      if (s.includes('date')) return 'date';
+      if (s.includes('duration')) return 'duration';
+      if (s.includes('point')) return 'point';
+      return 'string';
+    }
+
+    // Build the Cypher expression generating a value for one property.
+    // seqVar: cypher variable usable for sequential unique numbers (e.g. 'i'), or null.
+    function valueExpr(prop, entityCount, seqVar) {
+      const type = normalizeType(prop.type);
+      const unique = isUniqueProp(prop);
+      const eus = prop.estimatedUniqueSize;
+
+      const uniqueExpr = () => {
+        if (type === 'integer' || type === 'float') {
+          return seqVar ? seqVar : 'toInteger(rand()*9007199254740991)';
+        }
+        return 'randomUUID()';   // uuid for strings (and anything else)
+      };
+
+      if (unique) return uniqueExpr();
+
+      if (prop.indexed && eus !== null && eus !== undefined && Number.isFinite(Number(eus))) {
+        const size = Math.max(1, Math.round(Number(eus)));
+        if (entityCount !== null && entityCount !== undefined && size >= entityCount) {
+          return uniqueExpr();   // estimatedUniqueSize == entity count => unique values
+        }
+        // estimatedUniqueSize < entity count => pick randomly within a set of `size` values
+        switch (type) {
+          case 'integer': return `toInteger(rand()*${size})`;
+          case 'float': return `toInteger(rand()*${size})*1.0`;
+          case 'boolean': return 'rand() < 0.5';
+          case 'date': return `date('2000-01-01') + duration({days: toInteger(rand()*${size})})`;
+          case 'datetime': return `datetime('2000-01-01T00:00:00Z') + duration({days: toInteger(rand()*${size})})`;
+          default: return `'${String(prop.key).replace(/'/g, "\\'")}_' + toString(toInteger(rand()*${size}))`;
+        }
+      }
+
+      // Plain random value of the given type
+      switch (type) {
+        case 'integer': return 'toInteger(rand()*1000000)';
+        case 'float': return 'rand()*1000000';
+        case 'boolean': return 'rand() < 0.5';
+        case 'date': return "date('2000-01-01') + duration({days: toInteger(rand()*9000)})";
+        case 'datetime': return "datetime('2000-01-01T00:00:00Z') + duration({seconds: toInteger(rand()*800000000)})";
+        case 'localdatetime': return "localdatetime('2000-01-01T00:00:00') + duration({seconds: toInteger(rand()*800000000)})";
+        case 'time': return 'time({hour: toInteger(rand()*24), minute: toInteger(rand()*60), second: toInteger(rand()*60)})';
+        case 'localtime': return 'localtime({hour: toInteger(rand()*24), minute: toInteger(rand()*60), second: toInteger(rand()*60)})';
+        case 'duration': return 'duration({seconds: toInteger(rand()*86400)})';
+        case 'point': return 'point({longitude: rand()*360-180, latitude: rand()*180-90})';
+        default: return 'left(randomUUID(), 8)';
+      }
+    }
+
+    // setAssignments array: "n.key = value" / "r.key = value"
+    function buildSetAssignments(entity, varName, entityCount, seqVar) {
+      const out = [];
+      for (const p of (entity.properties || [])) {
+        if (p.key === 'synthetic_id') continue;   // set by the MERGE pattern itself
+        out.push(`${varName}.${ident(p.key)} = ${valueExpr(p, entityCount, seqVar)}`);
+      }
+      return out;
+    }
+
+    // ---------------------------
+    // Query generation
+    // ---------------------------
+    const NORMAL_INIT =
+`LET mu = 0.5      // centering in middle of [0;1]
+LET sigma = 0.166 // lower = narrower, higher = wider (6-sigma bell curve fits in [0;1])`;
+
+    function normalRandBlock(idx) {
+      return (
+`  LET normal_rand${idx} = sqrt(-2.0*ln(rand())) * cos(2.0*pi()*rand()) * sigma + mu
+  LET normal_rand${idx}_capped = CASE WHEN normal_rand${idx} < 0.0 THEN 0.0 WHEN normal_rand${idx} >= 1.0 THEN 0.9999999 ELSE normal_rand${idx} END // cap both ends`);
+    }
+
+    function nodeQuery(label, count, setAssignments) {
+      const setLine = setAssignments.length ? `\n  SET ${setAssignments.join(', ')}` : '';
+      return (
+`UNWIND range(1, ${count}) AS i
+CALL (i) {
+  MERGE (n:${ident(label)} {synthetic_id: i})${setLine}
+} IN CONCURRENT TRANSACTIONS OF 1000 ROWS`);
+    }
+
+    // Unambiguous case (single source label, single target label)
+    function relQuerySimple(type, sourceLabel, targetLabel, count, setAssignments) {
+      const setLine = setAssignments.length ? `\n  SET ${setAssignments.join(', ')}` : '';
+      return (
+`${NORMAL_INIT}
+CALL () {
+  MATCH (s:${ident(sourceLabel)})
+  RETURN count(s) AS sourceCount
+}
+CALL () {
+  MATCH (t:${ident(targetLabel)})
+  RETURN count(t) AS targetCount
+}
+UNWIND range(1, ${count}) AS i
+CALL (i, sourceCount, targetCount, mu, sigma) {
+${normalRandBlock(1)}
+${normalRandBlock(2)}
+  WITH i, toInteger(normal_rand1_capped * sourceCount) + 1 AS s_id, toInteger(normal_rand2_capped * targetCount) + 1 AS t_id
+  MATCH (s:${ident(sourceLabel)} {synthetic_id: s_id})
+  MATCH (t:${ident(targetLabel)} {synthetic_id: t_id})
+  MERGE (s)-[r:${ident(type)}]->(t)${setLine}
+} IN TRANSACTIONS OF 1000 ROWS`);
+    }
+
+    function cypherMap(labelCounts) {
+      return '{' + labelCounts.map(x => `${ident(x.label)}: ${x.count}`).join(', ') + '}';
+    }
+
+    // Ambiguous n-n case: several source labels AND several target labels.
+    function relQueryAmbiguous(type, sources, targets, setAssignments) {
+      const setLine = setAssignments.length ? `\n  SET ${setAssignments.join(', ')}` : '';
+      return (
+`${NORMAL_INIT}
+LET sources = ${cypherMap(sources)}
+LET targets = ${cypherMap(targets)}
+LET totalRelCount = reduce(sum = 0, k IN keys(targets) | sum + targets[k])
+CALL (sources) {
+  UNWIND keys(sources) AS srcLabel
+  CALL (srcLabel) {
+    MATCH (s:$(srcLabel))
+    RETURN {label: srcLabel, count: count(s)} AS x
+  }
+  RETURN collect(x) AS sources_totals
+}
+CALL (targets) {
+  UNWIND keys(targets) AS tgtLabel
+  CALL (tgtLabel) {
+    MATCH (t:$(tgtLabel))
+    RETURN {label: tgtLabel, count: count(t)} AS x
+  }
+  RETURN collect(x) AS targets_totals
+}
+// pick source labels sequentially
+UNWIND keys(sources) AS srcLabel
+LET c = sources[srcLabel]
+UNWIND range(1, c) AS i
+CALL (srcLabel, targets, sources_totals, targets_totals, mu, sigma, totalRelCount) {
+  // 1. select a tgtLabel from targets (weighted random pick)
+  LET randNum = rand() * totalRelCount
+  LET randomPick = reduce(acc = {currentSum: 0, picked: null}, tgtLbl IN keys(targets) |
+    CASE
+      WHEN acc.picked IS NOT NULL THEN acc
+      WHEN acc.currentSum + targets[tgtLbl] >= randNum THEN {currentSum: acc.currentSum + targets[tgtLbl], picked: tgtLbl}
+      ELSE {currentSum: acc.currentSum + targets[tgtLbl], picked: null}
+    END
+  )
+  LET tgtLabel = randomPick.picked
+  // 2. pick the random source/target nodes within all nodes of the picked labels
+  LET sourceCount = [s IN sources_totals WHERE s.label = srcLabel | s.count][0]
+  LET targetCount = [t IN targets_totals WHERE t.label = tgtLabel | t.count][0]
+${normalRandBlock(1)}
+${normalRandBlock(2)}
+  WITH srcLabel, tgtLabel, toInteger(normal_rand1_capped * sourceCount) + 1 AS s_id, toInteger(normal_rand2_capped * targetCount) + 1 AS t_id
+  MATCH (s:$(srcLabel) {synthetic_id: s_id})
+  MATCH (t:$(tgtLabel) {synthetic_id: t_id})
+  MERGE (s)-[r:${ident(type)}]->(t)${setLine}
+} IN TRANSACTIONS OF 1000 ROWS`);
+    }
+
+    // Split a total count across labels using per-label counts when available, else evenly.
+    function splitCount(total, labels, labelCounts) {
+      const byLabel = new Map((labelCounts || []).map(x => [x.label, x.count || 0]));
+      const known = labels.filter(l => byLabel.has(l));
+      if (known.length === labels.length && known.length > 0) {
+        const sum = labels.reduce((a, l) => a + byLabel.get(l), 0);
+        if (sum > 0) return labels.map(l => ({ label: l, count: Math.round(total * byLabel.get(l) / sum) }));
+      }
+      const even = Math.round(total / Math.max(1, labels.length));
+      return labels.map(l => ({ label: l, count: even }));
+    }
+
+    // Fallback index/constraint statements derived from the model, used when
+    // hc.db statements are not available (e.g. raw model_json input).
+    function statementsFromModel() {
+      const constraints = [];
+      const indexes = [];
+      const add = (arr, stmt) => { if (!arr.includes(stmt)) arr.push(stmt); };
+
+      for (const [label, entity] of Object.entries(model.nodeLabels || {})) {
+        for (const p of (entity.properties || [])) {
+          if (p.key === 'synthetic_id') continue;
+          for (const c of (p.constraintTypes || [])) {
+            const cs = String(c).toLowerCase();
+            if (cs.includes('key')) add(constraints, `CREATE CONSTRAINT IF NOT EXISTS FOR (n:${ident(label)}) REQUIRE n.${ident(p.key)} IS NODE KEY`);
+            else if (cs.includes('unique')) add(constraints, `CREATE CONSTRAINT IF NOT EXISTS FOR (n:${ident(label)}) REQUIRE n.${ident(p.key)} IS UNIQUE`);
+            else if (cs.includes('exist')) add(constraints, `CREATE CONSTRAINT IF NOT EXISTS FOR (n:${ident(label)}) REQUIRE n.${ident(p.key)} IS NOT NULL`);
+            // PropertyType constraints are not needed for our purposes (types align by construction)
+          }
+          for (const it of (p.indexTypes || [])) {
+            const s = String(it).toUpperCase();
+            if (s === 'RANGE') add(indexes, `CREATE INDEX IF NOT EXISTS FOR (n:${ident(label)}) ON (n.${ident(p.key)})`);
+            else if (s === 'TEXT') add(indexes, `CREATE TEXT INDEX IF NOT EXISTS FOR (n:${ident(label)}) ON (n.${ident(p.key)})`);
+            else if (s === 'POINT') add(indexes, `CREATE POINT INDEX IF NOT EXISTS FOR (n:${ident(label)}) ON (n.${ident(p.key)})`);
+            else if (s === 'FULLTEXT') add(indexes, `CREATE FULLTEXT INDEX ${ident('ft_' + label + '_' + p.key)} IF NOT EXISTS FOR (n:${ident(label)}) ON EACH [n.${ident(p.key)}]`);
+          }
+        }
+      }
+      for (const [type, entity] of Object.entries(model.relationshipTypes || {})) {
+        for (const p of (entity.properties || [])) {
+          for (const it of (p.indexTypes || [])) {
+            const s = String(it).toUpperCase();
+            if (s === 'RANGE') add(indexes, `CREATE INDEX IF NOT EXISTS FOR ()-[r:${ident(type)}]-() ON (r.${ident(p.key)})`);
+            else if (s === 'TEXT') add(indexes, `CREATE TEXT INDEX IF NOT EXISTS FOR ()-[r:${ident(type)}]-() ON (r.${ident(p.key)})`);
+          }
+        }
+      }
+      return { constraints, indexes };
+    }
+
+    // ---------------------------
+    // Plan building (the "details" tree content)
+    // ---------------------------
+    function rebuildPlan() {
+      plan = { constraints: [], indexes: [], nodes: [], rels: [] };
+      let idSeq = 0;
+      const mkItem = (group, name, meta, gen, opts = {}) => {
+        const item = {
+          id: 'it' + (idSeq++),
+          group, name, meta: meta || '',
+          gen,                       // (factor) => cypher string, or null for static
+          cypher: gen ? gen(scaleFactor()) : (opts.cypher || ''),
+          checked: opts.checked !== false,
+          edited: false,
+          note: opts.note || ''
+        };
+        plan[group].push(item);
+        return item;
+      };
+
+      // --- Constraints & indexes ---
+      let constraintStmts, indexStmts;
+      if (hcCreateStatements.length > 0) {
+        constraintStmts = hcCreateStatements.filter(s => /CREATE\s+CONSTRAINT/i.test(s));
+        indexStmts = hcCreateStatements.filter(s => !/CREATE\s+CONSTRAINT/i.test(s));
+      } else {
+        const derived = statementsFromModel();
+        constraintStmts = derived.constraints;
+        indexStmts = derived.indexes;
+      }
+
+      // Key constraints on synthetic_id for all node labels (for the ingestion itself)
+      for (const label of Object.keys(model.nodeLabels || {})) {
+        mkItem('constraints', `synthetic_id key (:${label})`, 'generated for ingestion', null, {
+          cypher: `CREATE CONSTRAINT ${ident('synthetic_id_' + label.replace(/[^A-Za-z0-9_]/g, '_'))} IF NOT EXISTS FOR (n:${ident(label)}) REQUIRE n.synthetic_id IS NODE KEY`
+        });
+      }
+      constraintStmts.forEach((s, i) => mkItem('constraints', `constraint #${i + 1}`, 'from source report', null, { cypher: s }));
+      indexStmts.forEach((s, i) => mkItem('indexes', `index #${i + 1}`, 'from source report', null, { cypher: s }));
+
+      // --- Nodes ---
+      for (const [label, entity] of Object.entries(model.nodeLabels || {})) {
+        const baseCount = entity.count;
+        const setAssignments = buildSetAssignments(entity, 'n', baseCount, 'i');
+        const gen = () => nodeQuery(label, scaled(baseCount), setAssignments);
+        const hasCount = baseCount !== null && baseCount !== undefined && baseCount > 0;
+        mkItem('nodes', label, () => `${fmt(scaled(baseCount))} nodes`, gen, {
+          checked: hasCount,
+          note: hasCount ? '' : (baseCount === 0 ? 'count is 0 in source data' : 'no count in source data (query logs only)')
+        });
+      }
+
+      // --- Relationships ---
+      for (const [type, rel] of Object.entries(model.relationshipTypes || {})) {
+        const baseCount = rel.count;
+        const hasCount = baseCount !== null && baseCount !== undefined && baseCount > 0;
+        const note = hasCount ? '' : (baseCount === 0 ? 'count is 0 in source data' : 'no count in source data (query logs only)');
+        const src = effectiveLabels(rel, 'source');
+        const tgt = effectiveLabels(rel, 'target');
+        const setAssignments = buildSetAssignments(rel, 'r', baseCount, 'i');
+
+        if (src.length === 0 || tgt.length === 0) {
+          mkItem('rels', type, () => 'source/target labels unknown', null, {
+            checked: false, cypher: '// Cannot generate: source or target labels are unknown in the source statistics.',
+            note: 'source or target label missing'
+          });
+          continue;
+        }
+
+        if (src.length <= 1 && tgt.length <= 1) {
+          // 1-1: single query
+          const gen = () => relQuerySimple(type, src[0], tgt[0], scaled(baseCount), setAssignments);
+          mkItem('rels', `${type} (${src[0]} → ${tgt[0]})`, () => `${fmt(scaled(baseCount))} rels`, gen, { checked: hasCount, note });
+        } else if (src.length > 1 && tgt.length > 1) {
+          // n-n ambiguous: one query with weighted random picks
+          const gen = () => {
+            const sources = splitCount(scaled(baseCount), src, rel.sourceLabelCounts).filter(x => x.count > 0);
+            const targets = splitCount(scaled(baseCount), tgt, rel.targetLabelCounts).filter(x => x.count > 0);
+            if (!sources.length || !targets.length) return '// Nothing to generate at this scale (all per-label counts are 0).';
+            return relQueryAmbiguous(type, sources, targets, setAssignments);
+          };
+          mkItem('rels', `${type} (${src.join('|')} → ${tgt.join('|')})`, () => `${fmt(scaled(baseCount))} rels (ambiguous n-n)`, gen, { checked: hasCount, note });
+        } else {
+          // 1-n / n-1: split into one unambiguous query per label on the multi side
+          const multiSide = src.length > 1 ? 'source' : 'target';
+          const multiLabels = multiSide === 'source' ? src : tgt;
+          const labelCounts = multiSide === 'source' ? rel.sourceLabelCounts : rel.targetLabelCounts;
+          multiLabels.forEach((lbl) => {
+            const gen = () => {
+              const parts = splitCount(scaled(baseCount), multiLabels, labelCounts);
+              const c = (parts.find(p => p.label === lbl) || { count: 0 }).count;
+              const s = multiSide === 'source' ? lbl : src[0];
+              const t = multiSide === 'source' ? tgt[0] : lbl;
+              if (c <= 0) return '// Nothing to generate for this label at this scale.';
+              return relQuerySimple(type, s, t, c, setAssignments);
+            };
+            const s = multiSide === 'source' ? lbl : src[0];
+            const t = multiSide === 'source' ? tgt[0] : lbl;
+            const metaFn = () => {
+              const parts = splitCount(scaled(baseCount), multiLabels, labelCounts);
+              const c = (parts.find(p => p.label === lbl) || { count: 0 }).count;
+              return `${fmt(c)} rels`;
+            };
+            mkItem('rels', `${type} (${s} → ${t})`, metaFn, gen, { checked: hasCount, note });
+          });
+        }
+      }
+
+      renderTree();
+    }
+
+    // ---------------------------
+    // Tree rendering
+    // ---------------------------
+    const GROUPS = [
+      { key: 'constraints', title: 'Constraints' },
+      { key: 'indexes', title: 'Indexes' },
+      { key: 'nodes', title: 'Nodes' },
+      { key: 'rels', title: 'Relationships' }
+    ];
+
+    function itemMeta(item) {
+      return typeof item.meta === 'function' ? item.meta() : item.meta;
+    }
+
+    function renderTree() {
+      elTree.innerHTML = '';
+      for (const g of GROUPS) {
+        const items = plan[g.key];
+        const details = document.createElement('details');
+        details.className = 'tree-group';
+        details.open = (g.key === 'nodes' || g.key === 'rels');
+
+        const summary = document.createElement('summary');
+        const groupCb = document.createElement('input');
+        groupCb.type = 'checkbox';
+        groupCb.checked = items.some(it => it.checked);
+        groupCb.addEventListener('click', (e) => e.stopPropagation());
+        groupCb.addEventListener('change', () => {
+          items.forEach(it => {
+            it.checked = groupCb.checked;
+            const cb = details.querySelector(`input[data-id="${it.id}"]`);
+            if (cb) cb.checked = groupCb.checked;
+          });
+        });
+        summary.appendChild(groupCb);
+        summary.appendChild(document.createTextNode(' ' + g.title + ' '));
+        const cnt = document.createElement('span');
+        cnt.className = 'group-count';
+        cnt.textContent = `(${items.length})`;
+        summary.appendChild(cnt);
+        details.appendChild(summary);
+
+        for (const item of items) {
+          const div = document.createElement('div');
+          div.className = 'tree-item';
+
+          const head = document.createElement('div');
+          head.className = 'item-head';
+          const cb = document.createElement('input');
+          cb.type = 'checkbox';
+          cb.checked = item.checked;
+          cb.dataset.id = item.id;
+          cb.addEventListener('change', () => {
+            item.checked = cb.checked;
+            groupCb.checked = items.some(it => it.checked);
+          });
+          head.appendChild(cb);
+
+          const nm = document.createElement('span');
+          nm.className = 'item-name';
+          nm.textContent = item.name;
+          head.appendChild(nm);
+
+          const meta = document.createElement('span');
+          meta.className = 'item-meta';
+          meta.dataset.metaFor = item.id;
+          meta.textContent = itemMeta(item);
+          head.appendChild(meta);
+
+          if (item.note) {
+            const note = document.createElement('span');
+            note.className = 'item-note';
+            note.textContent = '— ' + item.note;
+            head.appendChild(note);
+          }
+          div.appendChild(head);
+
+          const ta = document.createElement('textarea');
+          ta.value = item.cypher;
+          ta.spellcheck = false;
+          ta.dataset.cypherFor = item.id;
+          ta.rows = Math.min(24, Math.max(2, item.cypher.split('\n').length + 1));
+          ta.addEventListener('input', () => {
+            item.cypher = ta.value;
+            item.edited = true;
+            ta.classList.add('edited');
+          });
+          div.appendChild(ta);
+
+          details.appendChild(div);
+        }
+        elTree.appendChild(details);
+      }
+    }
+
+    // ---------------------------
+    // Scale slider
+    // ---------------------------
+    elScaleSlider.addEventListener('input', () => {
+      const v = Number(elScaleSlider.value);
+      elScaleReadout.textContent = `${v}% (×${(v / 100).toFixed(2)})`;
+      if (!plan) return;
+      // Regenerate queries at the new scale, preserving user edits.
+      for (const g of GROUPS) {
+        for (const item of plan[g.key]) {
+          if (item.gen && !item.edited) {
+            item.cypher = item.gen(scaleFactor());
+            const ta = elTree.querySelector(`textarea[data-cypher-for="${item.id}"]`);
+            if (ta) ta.value = item.cypher;
+          }
+          const meta = elTree.querySelector(`[data-meta-for="${item.id}"]`);
+          if (meta) meta.textContent = itemMeta(item);
+        }
+      }
+    });
+
+    // ---------------------------
+    // Ingestion
+    // ---------------------------
+    function logLine(msg, cls) {
+      elLog.classList.add('visible');
+      const div = document.createElement('div');
+      div.className = cls || 'l-info';
+      div.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+      elLog.appendChild(div);
+      elLog.scrollTop = elLog.scrollHeight;
+    }
+
+    function progressRow(name) {
+      const row = document.createElement('div');
+      row.className = 'progress-row';
+      row.innerHTML = `<div class="p-name" title="${escapeHtml(name)}">${escapeHtml(name)}</div>
+        <div class="progress"><div class="bar"></div></div>
+        <div class="p-status">pending</div>`;
+      elProgressZone.appendChild(row);
+      const bar = row.querySelector('.bar');
+      const status = row.querySelector('.p-status');
+      return {
+        start() { bar.classList.add('indeterminate'); status.textContent = 'running…'; },
+        set(frac) { bar.classList.remove('indeterminate'); bar.style.width = `${Math.round(frac * 100)}%`; },
+        done(msg) {
+          bar.classList.remove('indeterminate');
+          bar.style.width = '100%';
+          bar.classList.add('done');
+          status.textContent = msg || 'done';
+          status.classList.add('good');
+        },
+        fail(msg) {
+          bar.classList.remove('indeterminate');
+          bar.style.width = '100%';
+          bar.classList.add('failed');
+          status.textContent = msg || 'failed';
+          status.classList.add('bad');
+        }
+      };
+    }
+
+    async function runCypher(cypher) {
+      const session = driver.session({ database: targetDatabase() });
+      try {
+        // Auto-commit (implicit) transaction, required for CALL {…} IN TRANSACTIONS.
+        return await session.run(cypher);
+      } finally {
+        await session.close();
+      }
+    }
+
+    elBtnStop.addEventListener('click', () => {
+      stopRequested = true;
+      elBtnStop.disabled = true;
+      logLine('Stop requested — will halt after the current statement.', 'l-warn');
+    });
+
+    elBtnIngest.addEventListener('click', async () => {
+      if (ingesting || !plan) return;
+      if (!driver) { logLine('No active connection. Please check connectivity first.', 'l-err'); return; }
+
+      ingesting = true;
+      stopRequested = false;
+      elBtnIngest.disabled = true;
+      elBtnStop.disabled = false;
+      elIngestSummary.textContent = '';
+      elProgressZone.innerHTML = '';
+      elProgressZone.classList.add('visible');
+      elLog.innerHTML = '';
+
+      const t0 = performance.now();
+      let ok = 0, failed = 0, skippedExisting = 0;
+
+      const isRunnable = (it) => it.checked && it.cypher.trim() && !it.cypher.trim().startsWith('//');
+
+      try {
+        // 1. Constraints (grouped progress), 2. Indexes (grouped progress)
+        for (const g of [{ key: 'constraints', title: 'Constraints' }, { key: 'indexes', title: 'Indexes' }]) {
+          const items = plan[g.key].filter(isRunnable);
+          if (!items.length) continue;
+          const p = progressRow(`${g.title} (${items.length})`);
+          p.start();
+          let doneCount = 0, groupFailed = 0;
+          for (const item of items) {
+            if (stopRequested) break;
+            try {
+              await runCypher(item.cypher);
+              ok++;
+              logLine(`${g.title.slice(0, -1)} created: ${item.name}`, 'l-ok');
+            } catch (err) {
+              const msg = err && err.message ? err.message : String(err);
+              if (/already exists|EquivalentSchemaRule|ConstraintAlreadyExists|IndexAlreadyExists/i.test(msg)) {
+                skippedExisting++;
+                logLine(`${item.name}: already exists, skipped.`, 'l-warn');
+              } else {
+                failed++; groupFailed++;
+                logLine(`${item.name} FAILED: ${msg}`, 'l-err');
+              }
+            }
+            doneCount++;
+            p.set(doneCount / items.length);
+          }
+          if (stopRequested) { p.fail('stopped'); break; }
+          if (groupFailed) p.fail(`${groupFailed} failed`); else p.done();
+        }
+
+        // 3. Nodes (one progress bar per label), 4. Relationships (one per type/query)
+        if (!stopRequested) {
+          for (const g of [{ key: 'nodes', prefix: 'Nodes' }, { key: 'rels', prefix: 'Rels' }]) {
+            for (const item of plan[g.key].filter(isRunnable)) {
+              if (stopRequested) break;
+              const p = progressRow(`${g.prefix}: ${item.name}`);
+              p.start();
+              const ts = performance.now();
+              try {
+                await runCypher(item.cypher);
+                const secs = ((performance.now() - ts) / 1000).toFixed(1);
+                ok++;
+                p.done(`${secs}s`);
+                logLine(`${g.prefix} ${item.name}: loaded in ${secs}s.`, 'l-ok');
+              } catch (err) {
+                const msg = err && err.message ? err.message : String(err);
+                failed++;
+                p.fail('failed');
+                logLine(`${g.prefix} ${item.name} FAILED: ${msg}`, 'l-err');
+              }
+            }
+          }
+        }
+
+        const totalSecs = ((performance.now() - t0) / 1000).toFixed(1);
+        const summary = stopRequested
+          ? `Stopped. ${ok} statement(s) succeeded, ${failed} failed, ${skippedExisting} already existed (${totalSecs}s).`
+          : (failed === 0
+            ? `✅ Ingestion completed: ${ok} statement(s) succeeded${skippedExisting ? `, ${skippedExisting} already existed` : ''} in ${totalSecs}s.`
+            : `⚠️ Ingestion finished with errors: ${ok} succeeded, ${failed} failed, ${skippedExisting} already existed (${totalSecs}s).`);
+        elIngestSummary.textContent = summary;
+        logLine(summary, failed === 0 && !stopRequested ? 'l-ok' : 'l-warn');
+      } finally {
+        ingesting = false;
+        elBtnIngest.disabled = false;
+        elBtnStop.disabled = true;
+      }
+    });
+  </script>
+</body>
+</html>

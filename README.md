@@ -10,6 +10,7 @@ A repository of small tools built using genAI
 - [query_log_swimlanes](https://pecollet.github.io/vibe-tools/query_log_swimlanes)
 - [aura_hc_shortcuts](https://pecollet.github.io/vibe-tools/aura_hc_shortcuts)
 - [hc_most_costly_2_desktop](https://pecollet.github.io/vibe-tools/hc_most_costly_2_desktop)
+- [doppelgrapher](https://pecollet.github.io/vibe-tools/doppelgrapher)
 
 ## Descriptions
 
@@ -72,6 +73,13 @@ Configure node/relationship counts & properties with templates including:
 
 <img width="994" height="799" alt="image" src="https://github.com/user-attachments/assets/f01d59c3-868e-4520-85ba-94ebebc04347" />
 <img width="1294" height="484" alt="image" src="https://github.com/user-attachments/assets/2e5fb8f9-8c6c-4e69-9a35-55e9d335f5d2" />
+
+### [doppelgrapher](https://pecollet.github.io/vibe-tools/doppelgrapher)
+Generate a synthetic Neo4j graph that reproduces the shape of a source graph (labels, relationship types, counts, properties, indexes & constraints) from Health Check statistics — without any of the original data.
+- Drop a Health Check report zip (also accepts `hc.db` or a raw `model_json` file); the tool analyzes the statistics and flags multi-labelled nodes, inferred label overlaps and ambiguous relationship types
+- Connect to a target (empty) Neo4j database with the Neo4j JS driver (URL/user remembered in local storage)
+- Pick a scale factor (0–200% of the source counts), review/edit the generated Cypher (constraints, indexes, per-label node loads, per-type relationship loads), uncheck anything to exclude it
+- Ingest with per-step progress bars and a success/failure log. Node/relationship loads use batched `CALL {…} IN [CONCURRENT] TRANSACTIONS`, `synthetic_id` node keys, and normal-distribution source/target picks (weighted random label picks for ambiguous n-n relationship types)
 
 
 
