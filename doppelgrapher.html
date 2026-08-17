@@ -335,6 +335,40 @@
 
     .btns { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
     .diag { margin-top: 8px; font-size: 11px; color: var(--muted); }
+
+    .settings-btn { padding: 7px 11px; font-size: 15px; line-height: 1; }
+
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      display: none;
+      place-items: center;
+      background: rgba(0, 0, 0, 0.55);
+      z-index: 100;
+    }
+    .modal-overlay.open { display: grid; }
+    .modal {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 18px 20px;
+      width: min(420px, 92vw);
+      box-shadow: 0 18px 60px rgba(0,0,0,0.55);
+    }
+    .modal h3 { margin: 0 0 14px; font-size: 15px; }
+    .modal .field { margin-bottom: 12px; }
+    .modal input[type="number"] {
+      background: rgba(0,0,0,0.25);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 10px 12px;
+      border-radius: 10px;
+      font-size: 13px;
+      font-family: inherit;
+    }
+    .modal input[type="number"]:focus { outline: 1px solid var(--accent); }
+    .modal .field-hint { font-size: 11px; color: var(--muted); font-weight: 400; }
+    .modal .btns { justify-content: flex-end; margin-top: 8px; }
   </style>
 </head>
 <body>
@@ -388,6 +422,7 @@
         <div class="slider-zone">
           <input type="range" id="scaleSlider" min="0" max="200" step="1" value="100" />
           <span class="scale-readout" id="scaleReadout">100% (×1.00)</span>
+          <button type="button" id="btnSettings" class="settings-btn" title="Ingestion settings (batch sizes, concurrency)">⚙</button>
         </div>
 
         <details class="tree-root" id="detailsTree">
@@ -405,6 +440,29 @@
         <div class="log" id="log"></div>
       </section>
 
+    </div>
+  </div>
+
+  <!-- ============ Ingestion settings popup ============ -->
+  <div class="modal-overlay" id="settingsOverlay">
+    <div class="modal" role="dialog" aria-labelledby="settingsTitle">
+      <h3 id="settingsTitle">Ingestion settings</h3>
+      <label class="field">Nodes batch size
+        <input type="number" id="settingNodesBatch" min="1" step="1" value="1000" />
+        <span class="field-hint">Rows per transaction in node queries (… TRANSACTIONS OF N ROWS)</span>
+      </label>
+      <label class="field">Relationships batch size
+        <input type="number" id="settingRelsBatch" min="1" step="1" value="1000" />
+        <span class="field-hint">Rows per transaction in relationship queries (IN TRANSACTIONS OF N ROWS)</span>
+      </label>
+      <label class="field">Nodes concurrency
+        <input type="number" id="settingNodesConcurrency" min="1" step="1" placeholder="server default" />
+        <span class="field-hint">If set, node queries use IN N CONCURRENT TRANSACTIONS; empty = let the server decide</span>
+      </label>
+      <div class="btns">
+        <button type="button" id="btnSettingsCancel">Cancel</button>
+        <button type="button" id="btnSettingsSave" class="primary">Save</button>
+      </div>
     </div>
   </div>
 
@@ -431,6 +489,13 @@
     const elConnStatus = document.getElementById('connStatus');
     const elScaleSlider = document.getElementById('scaleSlider');
     const elScaleReadout = document.getElementById('scaleReadout');
+    const elBtnSettings = document.getElementById('btnSettings');
+    const elSettingsOverlay = document.getElementById('settingsOverlay');
+    const elSettingNodesBatch = document.getElementById('settingNodesBatch');
+    const elSettingRelsBatch = document.getElementById('settingRelsBatch');
+    const elSettingNodesConcurrency = document.getElementById('settingNodesConcurrency');
+    const elBtnSettingsSave = document.getElementById('btnSettingsSave');
+    const elBtnSettingsCancel = document.getElementById('btnSettingsCancel');
     const elTree = document.getElementById('tree');
     const elBtnIngest = document.getElementById('btnIngest');
     const elBtnStop = document.getElementById('btnStop');
@@ -447,6 +512,11 @@
     let driver = null;                // neo4j driver instance
     let ingesting = false;
     let stopRequested = false;
+    const ingestSettings = {
+      nodesBatchSize: 1000,           // ... TRANSACTIONS OF N ROWS in node queries
+      relsBatchSize: 1000,            // IN TRANSACTIONS OF N ROWS in relationship queries
+      nodesConcurrency: null          // if set: IN N CONCURRENT TRANSACTIONS (else server default)
+    };
 
     const LS_URL = 'doppelgrapher.neo4jUrl';
     const LS_USER = 'doppelgrapher.neo4jUser';
@@ -888,13 +958,23 @@ LET sigma = 0.166 // lower = narrower, higher = wider (6-sigma bell curve fits i
   LET normal_rand${idx}_capped = CASE WHEN normal_rand${idx} < 0.0 THEN 0.0 WHEN normal_rand${idx} >= 1.0 THEN 0.9999999 ELSE normal_rand${idx} END // cap both ends`);
     }
 
+    // "IN [N] CONCURRENT TRANSACTIONS OF <batch> ROWS" per the ingestion settings
+    function nodeTxSuffix() {
+      const conc = ingestSettings.nodesConcurrency ? `${ingestSettings.nodesConcurrency} ` : '';
+      return `IN ${conc}CONCURRENT TRANSACTIONS OF ${ingestSettings.nodesBatchSize} ROWS`;
+    }
+
+    function relTxSuffix() {
+      return `IN TRANSACTIONS OF ${ingestSettings.relsBatchSize} ROWS`;
+    }
+
     function nodeQuery(label, count, setAssignments) {
       const setLine = setAssignments.length ? `\n  SET ${setAssignments.join(', ')}` : '';
       return (
 `UNWIND range(1, ${count}) AS i
 CALL (i) {
   MERGE (n:${ident(label)} {synthetic_id: i})${setLine}
-} IN CONCURRENT TRANSACTIONS OF 1000 ROWS`);
+} ${nodeTxSuffix()}`);
     }
 
     // Unambiguous case (single source label, single target label)
@@ -918,7 +998,7 @@ ${normalRandBlock(2)}
   MATCH (s:${ident(sourceLabel)} {synthetic_id: s_id})
   MATCH (t:${ident(targetLabel)} {synthetic_id: t_id})
   MERGE (s)-[r:${ident(type)}]->(t)${setLine}
-} IN TRANSACTIONS OF 1000 ROWS`);
+} ${relTxSuffix()}`);
     }
 
     function cypherMap(labelCounts) {
@@ -973,7 +1053,7 @@ ${normalRandBlock(2)}
   MATCH (s:$(srcLabel) {synthetic_id: s_id})
   MATCH (t:$(tgtLabel) {synthetic_id: t_id})
   MERGE (s)-[r:${ident(type)}]->(t)${setLine}
-} IN TRANSACTIONS OF 1000 ROWS`);
+} ${relTxSuffix()}`);
     }
 
     // Split a total count across labels using per-label counts when available, else evenly.
@@ -1361,11 +1441,9 @@ ${normalRandBlock(2)}
     // ---------------------------
     // Scale slider
     // ---------------------------
-    elScaleSlider.addEventListener('input', () => {
-      const v = Number(elScaleSlider.value);
-      elScaleReadout.textContent = `${v}% (×${(v / 100).toFixed(2)})`;
+    // Regenerate queries (after a scale or settings change), preserving user edits.
+    function regenerateQueries() {
       if (!plan) return;
-      // Regenerate queries at the new scale, preserving user edits.
       for (const g of GROUPS) {
         for (const item of plan[g.key]) {
           if (item.gen && !item.edited) {
@@ -1377,6 +1455,45 @@ ${normalRandBlock(2)}
           if (meta) meta.textContent = itemMeta(item);
         }
       }
+    }
+
+    elScaleSlider.addEventListener('input', () => {
+      const v = Number(elScaleSlider.value);
+      elScaleReadout.textContent = `${v}% (×${(v / 100).toFixed(2)})`;
+      regenerateQueries();
+    });
+
+    // ---------------------------
+    // Ingestion settings popup
+    // ---------------------------
+    function openSettings() {
+      elSettingNodesBatch.value = String(ingestSettings.nodesBatchSize);
+      elSettingRelsBatch.value = String(ingestSettings.relsBatchSize);
+      elSettingNodesConcurrency.value = ingestSettings.nodesConcurrency === null ? '' : String(ingestSettings.nodesConcurrency);
+      elSettingsOverlay.classList.add('open');
+    }
+
+    function closeSettings() {
+      elSettingsOverlay.classList.remove('open');
+    }
+
+    // Positive integer from an input field, or the fallback when blank/invalid.
+    function positiveInt(raw, fallback) {
+      const n = Math.floor(Number(raw));
+      return Number.isFinite(n) && n >= 1 ? n : fallback;
+    }
+
+    elBtnSettings.addEventListener('click', openSettings);
+    elBtnSettingsCancel.addEventListener('click', closeSettings);
+    elSettingsOverlay.addEventListener('click', (e) => { if (e.target === elSettingsOverlay) closeSettings(); });
+    elBtnSettingsSave.addEventListener('click', () => {
+      ingestSettings.nodesBatchSize = positiveInt(elSettingNodesBatch.value, 1000);
+      ingestSettings.relsBatchSize = positiveInt(elSettingRelsBatch.value, 1000);
+      ingestSettings.nodesConcurrency = elSettingNodesConcurrency.value.trim() === ''
+        ? null
+        : positiveInt(elSettingNodesConcurrency.value, null);
+      closeSettings();
+      regenerateQueries();
     });
 
     // ---------------------------
