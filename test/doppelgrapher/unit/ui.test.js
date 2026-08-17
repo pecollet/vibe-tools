@@ -2,7 +2,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { loadPage, dropModel, setScale, connect, readTree, stubNeo4j } = require('../helpers/page');
+const { loadPage, dropModel, setScale, connect, readTree, stubNeo4j, norm } = require('../helpers/page');
 const { specModel } = require('../helpers/fixtures');
 
 test('scaleFactor and scaled follow the slider (0-200%, default 100%)', async () => {
@@ -178,6 +178,26 @@ test('successful connectivity check unlocks section 3', async () => {
   const { window: w, document: doc } = await loadPage({ neo4j: stubNeo4j() });
   await connect(w);
   assert.ok(!doc.getElementById('section3').classList.contains('locked'));
+});
+
+test('plain neo4j:// and bolt:// URLs create the driver with encrypted: false', async () => {
+  for (const url of ['bolt://host:7687', 'neo4j://host:7687', 'BOLT://host:7687']) {
+    const stub = stubNeo4j();
+    const { window: w } = await loadPage({ neo4j: stub });
+    await connect(w, { url });
+    assert.equal(stub.driverCalls.length, 1);
+    assert.deepEqual(norm(stub.driverCalls[0].config), { encrypted: false }, `for ${url}`);
+  }
+});
+
+test('TLS schemes (neo4j+s://, bolt+s://, +ssc) keep the driver encryption default', async () => {
+  for (const url of ['neo4j+s://host:7687', 'bolt+s://host:7687', 'neo4j+ssc://host:7687']) {
+    const stub = stubNeo4j();
+    const { window: w } = await loadPage({ neo4j: stub });
+    await connect(w, { url });
+    assert.equal(stub.driverCalls.length, 1);
+    assert.deepEqual(norm(stub.driverCalls[0].config), {}, `for ${url}`);
+  }
 });
 
 test('targetDatabase defaults to "neo4j" when the field is blank', async () => {

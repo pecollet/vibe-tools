@@ -864,8 +864,10 @@
       try {
         const neo4j = await ensureNeo4j();
         if (driver) { try { await driver.close(); } catch (e) { /* ignore */ } }
-        driver = neo4j.driver(url, neo4j.auth.basic(user, password));
-        // driver 6.x: verifyConnectivity() resolves undefined; getServerInfo() both
+        // Plain (non-TLS) schemes: make the lack of encryption explicit, so the
+        // driver never tries to negotiate TLS (neo4j+s:// / bolt+s:// keep their default).
+        const driverConfig = /^(neo4j|bolt):\/\//i.test(url) ? { encrypted: false } : {};
+        driver = neo4j.driver(url, neo4j.auth.basic(user, password), driverConfig);
         // verifies connectivity and returns the server details
         const info = await driver.getServerInfo({ database });
         const proto = info.protocolVersion && typeof info.protocolVersion === 'object'

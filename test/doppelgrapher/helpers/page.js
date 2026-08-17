@@ -136,10 +136,11 @@ function readTree(window) {
  * opts.failConnect: makes the connectivity check reject.
  */
 function stubNeo4j(record = [], opts = {}) {
-  return {
+  const stub = {
     record,
+    driverCalls: [],   // {url, config} for every driver() instantiation
     auth: { basic: (user, password) => ({ scheme: 'basic', user, password }) },
-    driver: (url, auth) => ({
+    driver: (url, auth, config) => (stub.driverCalls.push({ url, config }), {
       // driver 6.x API: getServerInfo() verifies connectivity and returns the details
       getServerInfo: async ({ database } = {}) => {
         if (opts.failConnect) throw new Error('stub connection refused');
@@ -156,6 +157,7 @@ function stubNeo4j(record = [], opts = {}) {
       })
     })
   };
+  return stub;
 }
 
 module.exports = {
