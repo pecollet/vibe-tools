@@ -4,6 +4,9 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -28,3 +31,28 @@ jobs:
         run: npm test
         env:
           NEO4J_TEST_IMAGE: neo4j:2026.07.1-enterprise
+
+  # Deploys GitHub Pages only after the tests pass.
+  # Requires Settings -> Pages -> Source to be set to "GitHub Actions"
+  # (this replaces the automatic "pages build and deployment" workflow).
+  deploy-pages:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
