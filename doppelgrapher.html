@@ -791,6 +791,7 @@
       if (!s || s === '?' || s === 'unknown') return 'string';
       if (s.includes('string') || s.includes('text')) return 'string';
       if (s.includes('bool')) return 'boolean';
+      if (s.includes('point')) return 'point';   // before the numeric check: "point" contains "int"
       if (s.includes('float') || s.includes('double')) return 'float';
       if (s.includes('int') || s.includes('long') || s.includes('number')) return 'integer';
       if (s === 'datetime' || s.includes('zoneddatetime') || s.includes('date_time')) return 'datetime';
@@ -799,7 +800,6 @@
       if (s === 'time' || s.includes('zonedtime')) return 'time';
       if (s.includes('date')) return 'date';
       if (s.includes('duration')) return 'duration';
-      if (s.includes('point')) return 'point';
       return 'string';
     }
 

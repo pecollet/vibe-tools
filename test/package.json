@@ -1,0 +1,18 @@
+{
+  "name": "vibe-tools-tests",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Tests for the vibe-tools single-page tools (one subdirectory per tool)",
+  "scripts": {
+    "test": "node --test",
+    "test:unit": "node --test \"doppelgrapher/unit/*.test.js\"",
+    "test:functional": "node --test \"doppelgrapher/functional/*.test.js\""
+  },
+  "dependencies": {
+    "jsdom": "^25.0.1",
+    "jszip": "^3.10.1",
+    "neo4j-driver": "^5.28.1",
+    "sql.js": "^1.11.0",
+    "testcontainers": "^10.13.2"
+  }
+}
