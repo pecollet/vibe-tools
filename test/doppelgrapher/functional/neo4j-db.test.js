@@ -4,8 +4,9 @@
 // asserting the data actually written. Target resolution order:
 //   1. NEO4J_TEST_URI (+ NEO4J_TEST_USER / NEO4J_TEST_PASSWORD / NEO4J_TEST_DATABASE)
 //   2. a temporary Neo4j Enterprise container via Testcontainers (needs Docker;
-//      Enterprise is required for NODE KEY constraints, and the generated Cypher
-//      uses Cypher 25 syntax so the server must be 2025.06+)
+//      Enterprise is required for NODE KEY constraints, the generated Cypher
+//      uses Cypher 25 syntax, and graph types (ALTER CURRENT GRAPH TYPE)
+//      require 2026.02+)
 //   3. otherwise the test skips.
 
 const { test } = require('node:test');
@@ -141,6 +142,23 @@ test('ingests a synthetic graph into a real Neo4j and the written data matches t
       for (const label of Object.keys(model.nodeLabels)) {
         assert.ok(keyLabels.includes(label), `missing synthetic_id NODE KEY constraint for :${label}`);
       }
+
+      // --- graph type: relationship source/target label constraints exist ---
+      const allCons = constraints.records.map(r => ({
+        type: String(r.get('type')),
+        lot: (r.get('labelsOrTypes') || [])[0],
+        props: r.get('properties') || []
+      }));
+      assert.ok(allCons.some(c => c.lot === 'LIVES_IN' && /SOURCE/i.test(c.type)),
+        'missing LIVES_IN relationship source label constraint (from graph type)');
+      assert.ok(allCons.some(c => c.lot === 'LIVES_IN' && /TARGET/i.test(c.type)),
+        'missing LIVES_IN relationship target label constraint (from graph type)');
+
+      // --- property type constraints created for non-identifying labels ---
+      assert.ok(allCons.some(c => c.lot === 'City' && /PROPERTY_TYPE/i.test(c.type) && c.props.includes('population')),
+        'missing City.population property type constraint');
+      assert.ok(allCons.some(c => c.lot === 'Person' && /PROPERTY_TYPE/i.test(c.type) && c.props.includes('name')),
+        'missing Person.name property type constraint');
 
       // --- the index from the model was created ---
       const indexes = await session.run('SHOW INDEXES YIELD labelsOrTypes, properties RETURN *');

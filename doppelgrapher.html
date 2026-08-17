@@ -988,9 +988,102 @@ ${normalRandBlock(2)}
       return labels.map(l => ({ label: l, count: even }));
     }
 
+    // Map a model property type to a Cypher property type usable in
+    // "IS :: <TYPE>" constraints and graph type element types. Null when unknown.
+    function cypherPropertyType(t) {
+      const raw = String(t || '').trim().toLowerCase();
+      if (!raw || raw === '?' || raw === 'unknown') return null;
+      const map = {
+        string: 'STRING', boolean: 'BOOLEAN', integer: 'INTEGER', float: 'FLOAT',
+        date: 'DATE', datetime: 'ZONED DATETIME', localdatetime: 'LOCAL DATETIME',
+        time: 'ZONED TIME', localtime: 'LOCAL TIME', duration: 'DURATION', point: 'POINT'
+      };
+      return map[normalizeType(t)] || null;
+    }
+
+    function hasConstraint(prop, re) {
+      return (prop.constraintTypes || []).some(c => re.test(String(c)));
+    }
+
+    // " {prop :: TYPE [NOT NULL], ...}" block for a graph type element type,
+    // covering the entity's PropertyType and Existence constraints.
+    function elementTypePropBlock(entity) {
+      const parts = [];
+      for (const p of (entity.properties || [])) {
+        if (p.key === 'synthetic_id') continue;
+        const typed = hasConstraint(p, /propertytype/i);
+        const required = hasConstraint(p, /exist/i);
+        if (!typed && !required) continue;
+        const t = cypherPropertyType(p.type);
+        if (typed && t) parts.push(`${ident(p.key)} :: ${t}${required ? ' NOT NULL' : ''}`);
+        else if (required) parts.push(`${ident(p.key)} :: ANY NOT NULL`);  // ANY requires NOT NULL
+      }
+      return parts.length ? ` {${parts.join(', ')}}` : '';
+    }
+
+    // Implied label constraints and relationship source/target label constraints
+    // cannot be created with CREATE CONSTRAINT; they require a graph type
+    // (ALTER CURRENT GRAPH TYPE SET, Enterprise, Neo4j 2026.02+).
+    // NOTE: setting a graph type REPLACES all existing constraints, so this
+    // statement must run before any CREATE CONSTRAINT statement.
+    // Property type/existence constraints of identifying labels/types must be
+    // expressed inside their element type, so they are embedded here and the
+    // returned sets let the callers skip them elsewhere.
+    function buildGraphType() {
+      const identifyingLabels = new Set();
+      const identifyingRelTypes = new Set();
+      const elements = [];
+
+      for (const [label, entity] of Object.entries(model.nodeLabels || {})) {
+        const implied = (entity.impliedLabels || []).filter(Boolean);
+        if (!implied.length) continue;
+        identifyingLabels.add(label);
+        elements.push(`(:${ident(label)} => :${implied.map(ident).join('&')}${elementTypePropBlock(entity)})`);
+      }
+
+      for (const [type, rel] of Object.entries(model.relationshipTypes || {})) {
+        const src = (rel.constrainedSourceNodeLabels || [])[0];
+        const tgt = (rel.constrainedTargetNodeLabels || [])[0];
+        if (!src && !tgt) continue;
+        identifyingRelTypes.add(type);
+        elements.push(`(${src ? ':' + ident(src) : ''})-[:${ident(type)} =>${elementTypePropBlock(rel)}]->(${tgt ? ':' + ident(tgt) : ''})`);
+      }
+
+      const statement = elements.length
+        ? `ALTER CURRENT GRAPH TYPE SET {\n  ${elements.join(',\n  ')}\n}`
+        : null;
+      return { statement, identifyingLabels, identifyingRelTypes };
+    }
+
+    // Property type constraints (CREATE CONSTRAINT ... IS :: TYPE) for all
+    // labels/types except those covered by graph type element types.
+    function propertyTypeStatements(excludeLabels = new Set(), excludeRelTypes = new Set()) {
+      const out = [];
+      const add = (stmt) => { if (!out.includes(stmt)) out.push(stmt); };
+      for (const [label, entity] of Object.entries(model.nodeLabels || {})) {
+        if (excludeLabels.has(label)) continue;
+        for (const p of (entity.properties || [])) {
+          if (p.key === 'synthetic_id' || !hasConstraint(p, /propertytype/i)) continue;
+          const t = cypherPropertyType(p.type);
+          if (t) add(`CREATE CONSTRAINT IF NOT EXISTS FOR (n:${ident(label)}) REQUIRE n.${ident(p.key)} IS :: ${t}`);
+        }
+      }
+      for (const [type, rel] of Object.entries(model.relationshipTypes || {})) {
+        if (excludeRelTypes.has(type)) continue;
+        for (const p of (rel.properties || [])) {
+          if (!hasConstraint(p, /propertytype/i)) continue;
+          const t = cypherPropertyType(p.type);
+          if (t) add(`CREATE CONSTRAINT IF NOT EXISTS FOR ()-[r:${ident(type)}]-() REQUIRE r.${ident(p.key)} IS :: ${t}`);
+        }
+      }
+      return out;
+    }
+
     // Fallback index/constraint statements derived from the model, used when
     // hc.db statements are not available (e.g. raw model_json input).
-    function statementsFromModel() {
+    // Existence constraints are skipped for identifying labels of the graph
+    // type: they are already expressed inside the node element types.
+    function statementsFromModel(excludeExistenceLabels = new Set()) {
       const constraints = [];
       const indexes = [];
       const add = (arr, stmt) => { if (!arr.includes(stmt)) arr.push(stmt); };
@@ -1002,8 +1095,8 @@ ${normalRandBlock(2)}
             const cs = String(c).toLowerCase();
             if (cs.includes('key')) add(constraints, `CREATE CONSTRAINT IF NOT EXISTS FOR (n:${ident(label)}) REQUIRE n.${ident(p.key)} IS NODE KEY`);
             else if (cs.includes('unique')) add(constraints, `CREATE CONSTRAINT IF NOT EXISTS FOR (n:${ident(label)}) REQUIRE n.${ident(p.key)} IS UNIQUE`);
-            else if (cs.includes('exist')) add(constraints, `CREATE CONSTRAINT IF NOT EXISTS FOR (n:${ident(label)}) REQUIRE n.${ident(p.key)} IS NOT NULL`);
-            // PropertyType constraints are not needed for our purposes (types align by construction)
+            else if (cs.includes('exist') && !excludeExistenceLabels.has(label)) add(constraints, `CREATE CONSTRAINT IF NOT EXISTS FOR (n:${ident(label)}) REQUIRE n.${ident(p.key)} IS NOT NULL`);
+            // PropertyType constraints are generated separately (propertyTypeStatements)
           }
           for (const it of (p.indexTypes || [])) {
             const s = String(it).toUpperCase();
@@ -1048,14 +1141,28 @@ ${normalRandBlock(2)}
       };
 
       // --- Constraints & indexes ---
-      let constraintStmts, indexStmts;
+      // Graph type first: implied label constraints and relationship
+      // source/target label constraints cannot be created with CREATE
+      // CONSTRAINT, and ALTER CURRENT GRAPH TYPE SET replaces all existing
+      // constraints, so it must run before all CREATE CONSTRAINT statements.
+      const graphType = buildGraphType();
+      if (graphType.statement) {
+        mkItem('constraints', 'graph type', 'implied labels & relationship endpoint labels (Enterprise, Neo4j 2026.02+)', null, {
+          cypher: graphType.statement,
+          note: 'replaces existing constraints — runs first'
+        });
+      }
+
+      let constraintStmts, indexStmts, stmtOrigin;
       if (hcCreateStatements.length > 0) {
         constraintStmts = hcCreateStatements.filter(s => /CREATE\s+CONSTRAINT/i.test(s));
         indexStmts = hcCreateStatements.filter(s => !/CREATE\s+CONSTRAINT/i.test(s));
+        stmtOrigin = 'from source report';
       } else {
-        const derived = statementsFromModel();
+        const derived = statementsFromModel(graphType.identifyingLabels);
         constraintStmts = derived.constraints;
         indexStmts = derived.indexes;
+        stmtOrigin = 'derived from model';
       }
 
       // Key constraints on synthetic_id for all node labels (for the ingestion itself)
@@ -1064,8 +1171,10 @@ ${normalRandBlock(2)}
           cypher: `CREATE CONSTRAINT ${ident('synthetic_id_' + label.replace(/[^A-Za-z0-9_]/g, '_'))} IF NOT EXISTS FOR (n:${ident(label)}) REQUIRE n.synthetic_id IS NODE KEY`
         });
       }
-      constraintStmts.forEach((s, i) => mkItem('constraints', `constraint #${i + 1}`, 'from source report', null, { cypher: s }));
-      indexStmts.forEach((s, i) => mkItem('indexes', `index #${i + 1}`, 'from source report', null, { cypher: s }));
+      constraintStmts.forEach((s, i) => mkItem('constraints', `constraint #${i + 1}`, stmtOrigin, null, { cypher: s }));
+      propertyTypeStatements(graphType.identifyingLabels, graphType.identifyingRelTypes)
+        .forEach((s, i) => mkItem('constraints', `property type #${i + 1}`, 'derived from model', null, { cypher: s }));
+      indexStmts.forEach((s, i) => mkItem('indexes', `index #${i + 1}`, stmtOrigin, null, { cypher: s }));
 
       // --- Nodes ---
       for (const [label, entity] of Object.entries(model.nodeLabels || {})) {

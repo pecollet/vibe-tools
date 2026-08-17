@@ -31,7 +31,8 @@ test('the details tree contains all four groups with the expected items', async 
   await dropModel(w, specModel());
   const tree = readTree(w);
   assert.deepEqual(Object.keys(tree), ['Constraints', 'Indexes', 'Nodes', 'Relationships']);
-  // a synthetic_id key constraint per node label + 2 existence constraints from the model
+  // a synthetic_id key constraint per node label (plus graph type, existence
+  // and property type items covered in graph-type.test.js)
   assert.equal(tree['Constraints'].filter(i => i.name.startsWith('synthetic_id key')).length, 7);
   assert.equal(tree['Nodes'].length, 7);
   // LOVES splits into 2 unambiguous queries; SHARES_HELD_BY + LIVES_IN give 1 item each

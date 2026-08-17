@@ -19,25 +19,43 @@ async function runFullFlow({ model, scale = 100, stubOpts = {}, database = 'neo4
   return { w, record, summary };
 }
 
-test('ingestion executes constraints, then indexes, then nodes, then relationships', async () => {
+test('ingestion executes the graph type, then constraints, indexes, nodes, relationships', async () => {
   const { record, summary } = await runFullFlow({ model: specModel() });
 
   const kinds = record.map(r =>
+    /ALTER CURRENT GRAPH TYPE/.test(r.cypher) ? 'graphtype' :
     /CREATE\s+CONSTRAINT/.test(r.cypher) ? 'constraint' :
     /CREATE\s+(\w+\s+)?INDEX/.test(r.cypher) ? 'index' :
     /MERGE \(n:/.test(r.cypher) ? 'node' : 'rel');
 
-  // spec model: 7 synthetic_id keys + 2 existence constraints, 1 index,
+  // spec model: 1 graph type statement (must run before all CREATE CONSTRAINTs,
+  // since setting a graph type replaces existing constraints), then
+  // 7 synthetic_id keys + 1 existence constraint (City; Person is covered by
+  // its element type) + 2 property type constraints, 1 index,
   // 4 node labels with count > 0, LOVES split into 2 queries
   assert.deepEqual(kinds, [
+    'graphtype',
     'constraint', 'constraint', 'constraint', 'constraint', 'constraint',
-    'constraint', 'constraint', 'constraint', 'constraint',
+    'constraint', 'constraint', 'constraint', 'constraint', 'constraint',
     'index',
     'node', 'node', 'node', 'node',
     'rel', 'rel'
   ]);
   assert.ok(summary.includes('✅'));
-  assert.ok(summary.includes('16 statement(s) succeeded'));
+  assert.ok(summary.includes('18 statement(s) succeeded'));
+});
+
+test('the graph type statement covers implied labels and relationship endpoint labels', async () => {
+  const { record } = await runFullFlow({ model: specModel() });
+  const gt = record.filter(r => r.cypher.includes('ALTER CURRENT GRAPH TYPE'));
+  assert.equal(gt.length, 1);
+  assert.ok(gt[0].cypher.includes('(:Person => :Resident {name :: STRING NOT NULL})'));
+  assert.ok(gt[0].cypher.includes('(:Pet => :Resident&Animal'));
+  assert.ok(gt[0].cypher.includes('(:Resident)-[:LIVES_IN => {since :: DATE NOT NULL}]->(:City)'));
+  // property type constraints of non-identifying labels use CREATE CONSTRAINT ... IS ::
+  const pt = record.filter(r => r.cypher.includes('IS :: ')).map(r => r.cypher);
+  assert.ok(pt.some(c => c.includes('(n:City) REQUIRE n.population IS :: INTEGER')));
+  assert.ok(pt.some(c => c.includes('(n:City) REQUIRE n.name IS :: STRING')));
 });
 
 test('a synthetic_id NODE KEY constraint is created for every node label', async () => {
@@ -102,7 +120,7 @@ test('a failing statement is reported but the ingestion continues', async () => 
     stubOpts: { failOn: 'MERGE (n:Organisation' }
   });
   assert.ok(summary.includes('1 failed'), `summary was: ${summary}`);
-  assert.ok(summary.includes('15 succeeded'));
+  assert.ok(summary.includes('17 succeeded'));
   // relationships after the failed node load still executed
   assert.equal(record.filter(r => r.cypher.includes('MERGE (s)-[r:LOVES]->(t)')).length, 2);
   const logText = w.document.getElementById('log').textContent;

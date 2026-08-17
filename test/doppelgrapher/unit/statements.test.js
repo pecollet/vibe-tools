@@ -9,13 +9,25 @@ test('statementsFromModel derives constraints and indexes from property metadata
   const { window: w } = await loadPage();
   await dropModel(w, specModel());
   const { constraints, indexes } = w.statementsFromModel();
-  // Existence constraints for City.name and Person.name; PropertyType constraints skipped
+  // Existence constraints for City.name and Person.name
+  // (PropertyType constraints are generated separately by propertyTypeStatements)
   assert.deepEqual(norm(constraints).sort(), [
     'CREATE CONSTRAINT IF NOT EXISTS FOR (n:City) REQUIRE n.name IS NOT NULL',
     'CREATE CONSTRAINT IF NOT EXISTS FOR (n:Person) REQUIRE n.name IS NOT NULL'
   ].sort());
   // synthetic_id indexes are skipped; only Organisation.duns_nbr remains
   assert.deepEqual(norm(indexes), ['CREATE INDEX IF NOT EXISTS FOR (n:Organisation) ON (n.duns_nbr)']);
+});
+
+test('statementsFromModel skips existence constraints for graph type identifying labels', async () => {
+  const { window: w } = await loadPage();
+  await dropModel(w, specModel());
+  // Person is an identifying label of the graph type: its name existence
+  // constraint is embedded in the node element type instead
+  const { constraints } = w.statementsFromModel(new Set(['Person']));
+  assert.deepEqual(norm(constraints), [
+    'CREATE CONSTRAINT IF NOT EXISTS FOR (n:City) REQUIRE n.name IS NOT NULL'
+  ]);
 });
 
 test('statementsFromModel maps constraint types to NODE KEY / UNIQUE / NOT NULL', async () => {
@@ -39,7 +51,7 @@ test('statementsFromModel maps constraint types to NODE KEY / UNIQUE / NOT NULL'
   assert.ok(constraints.includes('CREATE CONSTRAINT IF NOT EXISTS FOR (n:L) REQUIRE n.k1 IS NODE KEY'));
   assert.ok(constraints.includes('CREATE CONSTRAINT IF NOT EXISTS FOR (n:L) REQUIRE n.k2 IS UNIQUE'));
   assert.ok(constraints.includes('CREATE CONSTRAINT IF NOT EXISTS FOR (n:L) REQUIRE n.k3 IS NOT NULL'));
-  assert.ok(!constraints.some(s => s.includes('k4')), 'PropertyType constraints must be skipped');
+  assert.ok(!constraints.some(s => s.includes('k4')), 'PropertyType constraints are generated separately (propertyTypeStatements)');
 });
 
 test('statementsFromModel maps index types, including relationship property indexes', async () => {
