@@ -83,6 +83,43 @@ test('a zip with hc.db in a nested directory is accepted', async () => {
   assert.equal(doc.getElementById('s1ok').textContent, '✅');
 });
 
+const SAMPLE_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10" fill="red"/></svg>';
+
+test('the model diagram SVG from the zip is shown in a foldable block', async () => {
+  const { window: w, document: doc } = await loadPage();
+  const dbBytes = await buildHcDb({ modelJson: specModel(), createStatements: STATEMENTS });
+  const zipBytes = await buildZip({
+    'report/hc.db': dbBytes,
+    'report/resources/img/model-with-counts.puml.svg': SAMPLE_SVG
+  });
+  await w.handleFile(binFile('report.zip', zipBytes));
+  assert.equal(doc.getElementById('s1ok').textContent, '✅');
+  const details = doc.querySelector('#analysisZone details.model-diagram');
+  assert.ok(details, 'expected a foldable model diagram');
+  assert.ok(!details.open, 'the diagram is folded by default');
+  assert.equal(details.querySelector('summary').textContent, 'Model diagram');
+  const img = details.querySelector('img');
+  assert.ok(img.src.startsWith('data:image/svg+xml'));
+  assert.ok(decodeURIComponent(img.src).includes('fill="red"'));
+});
+
+test('no diagram block is shown when the zip has no model SVG, or for non-zip inputs', async () => {
+  const { window: w, document: doc } = await loadPage();
+  const dbBytes = await buildHcDb({ modelJson: specModel(), createStatements: STATEMENTS });
+  await w.handleFile(binFile('report.zip', await buildZip({ 'hc.db': dbBytes })));
+  assert.equal(doc.querySelector('#analysisZone details.model-diagram'), null);
+
+  // a zip with an SVG followed by a plain JSON drop: the stale diagram is cleared
+  const zipBytes = await buildZip({
+    'hc.db': dbBytes,
+    'resources/img/model-with-counts.puml.svg': SAMPLE_SVG
+  });
+  await w.handleFile(binFile('report.zip', zipBytes));
+  assert.ok(doc.querySelector('#analysisZone details.model-diagram'));
+  await w.handleFile(jsonFile(specModel()));
+  assert.equal(doc.querySelector('#analysisZone details.model-diagram'), null);
+});
+
 test('a zip without hc.db reports an error', async () => {
   const { window: w, document: doc } = await loadPage();
   const zipBytes = await buildZip({ 'readme.txt': 'nothing here' });

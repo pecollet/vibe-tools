@@ -338,6 +338,28 @@
 
     .settings-btn { padding: 7px 11px; font-size: 15px; line-height: 1; }
 
+    details.model-diagram {
+      margin-top: 10px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: rgba(255,255,255,0.03);
+      overflow: hidden;
+    }
+    details.model-diagram > summary {
+      cursor: pointer;
+      padding: 8px 12px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--muted);
+      user-select: none;
+    }
+    details.model-diagram .diagram-wrap { padding: 0 12px 12px; }
+    details.model-diagram img {
+      width: 100%;
+      background: #fff;      /* PlantUML SVGs assume a light background */
+      border-radius: 8px;
+    }
+
     .modal-overlay {
       position: fixed;
       inset: 0;
@@ -526,6 +548,7 @@
     // ---------------------------
     let model = null;                 // parsed model_json
     let hcCreateStatements = [];      // statements from db_vars.indexes_create_statements (LOOKUPs filtered out)
+    let modelSvg = null;              // model diagram (resources/img/model-with-counts.puml.svg in the report zip)
     let plan = null;                  // { constraints: [], indexes: [], nodes: [], rels: [] } of plan items
     let driver = null;                // neo4j driver instance
     let ingesting = false;
@@ -652,6 +675,7 @@
         elAnalysisZone.innerHTML = '';
         model = null;
         hcCreateStatements = [];
+        modelSvg = null;
 
         const name = file.name.toLowerCase();
         if (name.endsWith('.json')) {
@@ -666,13 +690,20 @@
           await ensureJSZip();
           const zip = await window.JSZip.loadAsync(await file.arrayBuffer());
           let dbEntry = null;
+          let svgEntry = null;
           zip.forEach((relativePath, entry) => {
             const p = (relativePath || '').toLowerCase();
-            if (!dbEntry && entry && !entry.dir && (p === 'hc.db' || p.endsWith('/hc.db'))) dbEntry = entry;
+            if (!entry || entry.dir) return;
+            if (!dbEntry && (p === 'hc.db' || p.endsWith('/hc.db'))) dbEntry = entry;
+            if (!svgEntry && p.endsWith('resources/img/model-with-counts.puml.svg')) svgEntry = entry;
           });
           if (!dbEntry) throw new Error('Could not find hc.db inside the zip.');
           const bytes = new Uint8Array(await dbEntry.async('arraybuffer'));
           await readFromSqlite(bytes);
+          if (svgEntry) {
+            try { modelSvg = await svgEntry.async('string'); }
+            catch (e) { console.warn('Could not read the model diagram SVG:', e); }
+          }
         }
 
         if (!model || typeof model !== 'object' || !model.nodeLabels || !model.relationshipTypes) {
@@ -831,6 +862,12 @@
       }
       if (a.infos.length) {
         html += '<div class="infobox">ℹ️ Notes<ul>' + a.infos.map(w => `<li>${escapeHtml(w)}</li>`).join('') + '</ul></div>';
+      }
+      if (modelSvg) {
+        const src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(modelSvg)}`;
+        html += '<details class="model-diagram"><summary>Model diagram</summary>'
+          + `<div class="diagram-wrap"><img src="${src}" alt="Model diagram (from the Health Check report)" /></div>`
+          + '</details>';
       }
       elAnalysisZone.innerHTML = html;
     }
