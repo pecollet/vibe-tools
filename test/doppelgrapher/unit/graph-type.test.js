@@ -115,7 +115,7 @@ test('the graph type is the first item of the Constraints group in the details t
   const constraints = readTree(w)['Constraints'];
   const first = constraints[0];
   assert.equal(first.name, 'graph type');
-  assert.ok(first.cypher.startsWith('ALTER CURRENT GRAPH TYPE SET {'));
+  assert.ok(first.cypher.startsWith('CYPHER 25\nALTER CURRENT GRAPH TYPE SET {'));
   assert.ok(first.checked);
   // property type constraints appear as their own items
   const ptItems = constraints.filter(i => i.name.startsWith('property type'));

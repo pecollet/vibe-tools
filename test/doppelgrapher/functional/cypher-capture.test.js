@@ -43,6 +43,8 @@ test('ingestion executes the graph type, then constraints, indexes, nodes, relat
   ]);
   assert.ok(summary.includes('✅'));
   assert.ok(summary.includes('18 statement(s) succeeded'));
+  // every executed statement is pinned to Cypher 25
+  assert.ok(record.every(r => r.cypher.startsWith('CYPHER 25\n')));
 });
 
 test('the graph type statement covers implied labels and relationship endpoint labels', async () => {

@@ -46,7 +46,7 @@ test('an hc.db SQLite file is read directly (model_json + create statements)', a
   const constraintCyphers = tree['Constraints'].map(i => i.cypher);
   assert.ok(constraintCyphers.some(c => c.includes('org_key')));
   const indexCyphers = tree['Indexes'].map(i => i.cypher);
-  assert.deepEqual(indexCyphers, ['CREATE INDEX org_duns IF NOT EXISTS FOR (n:Organisation) ON (n.duns_nbr)']);
+  assert.deepEqual(indexCyphers, ['CYPHER 25\nCREATE INDEX org_duns IF NOT EXISTS FOR (n:Organisation) ON (n.duns_nbr)']);
 });
 
 test('default LOOKUP index statements are filtered out', async () => {

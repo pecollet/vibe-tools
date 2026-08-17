@@ -974,6 +974,11 @@
     // ---------------------------
     // Query generation
     // ---------------------------
+    // All statements are pinned to Cypher 25, which the generated queries
+    // (LET, dynamic labels, graph types) require regardless of the target
+    // database's default language.
+    const CYPHER_PREFIX = 'CYPHER 25\n';
+
     const NORMAL_INIT =
 `LET mu = 0.5      // centering in middle of [0;1]
 LET sigma = 0.166 // lower = narrower, higher = wider (6-sigma bell curve fits in [0;1])`;
@@ -1000,7 +1005,7 @@ LET sigma = 0.166 // lower = narrower, higher = wider (6-sigma bell curve fits i
       setItems.push(...setAssignments);
       const setLine = setItems.length ? `\n  SET ${setItems.join(', ')}` : '';
       return (
-`UNWIND range(1, ${count}) AS i
+`${CYPHER_PREFIX}UNWIND range(1, ${count}) AS i
 CALL (i) {
   MERGE (n:${ident(label)} {synthetic_id: i})${setLine}
 } ${nodeTxSuffix()}`);
@@ -1025,7 +1030,7 @@ CALL (i) {
       const setLine = setAssignments.length ? `\n  SET ${setAssignments.join(', ')}` : '';
       const d = relDistParts();
       return (
-`${d.init}CALL () {
+`${CYPHER_PREFIX}${d.init}CALL () {
   MATCH (s:${ident(sourceLabel)})
   RETURN count(s) AS sourceCount
 }
@@ -1051,7 +1056,7 @@ ${d.randBlocks}  WITH i, toInteger(${d.srcRand} * sourceCount) + 1 AS s_id, toIn
       const setLine = setAssignments.length ? `\n  SET ${setAssignments.join(', ')}` : '';
       const d = relDistParts();
       return (
-`${d.init}LET sources = ${cypherMap(sources)}
+`${CYPHER_PREFIX}${d.init}LET sources = ${cypherMap(sources)}
 LET targets = ${cypherMap(targets)}
 LET totalRelCount = reduce(sum = 0, k IN keys(targets) | sum + targets[k])
 CALL (sources) {
@@ -1245,12 +1250,18 @@ ${d.randBlocks}  WITH srcLabel, tgtLabel, toInteger(${d.srcRand} * sourceCount) 
       plan = { constraints: [], indexes: [], nodes: [], rels: [] };
       let idSeq = 0;
       const mkItem = (group, name, meta, gen, opts = {}) => {
+        // Static statements get the CYPHER 25 prefix too (generated ones carry it
+        // already); comment-only placeholders stay bare so they remain skippable.
+        const raw = opts.cypher || '';
+        const staticCypher = raw && !raw.trimStart().startsWith('//') && !raw.startsWith(CYPHER_PREFIX)
+          ? CYPHER_PREFIX + raw
+          : raw;
         const item = {
           id: 'it' + (idSeq++),
           group, name, meta: meta || '',
           gen,                       // (factor) => cypher string, or null for static
-          cypher: gen ? gen(scaleFactor()) : (opts.cypher || ''),
-          original: gen ? null : (opts.cypher || ''),   // pristine text for static items
+          cypher: gen ? gen(scaleFactor()) : staticCypher,
+          original: gen ? null : staticCypher,   // pristine text for static items
           checked: opts.checked !== false,
           edited: false,
           note: opts.note || ''
