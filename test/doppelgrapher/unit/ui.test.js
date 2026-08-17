@@ -75,6 +75,55 @@ test('user-edited queries are preserved when the scale changes', async () => {
   assert.ok(resident.cypher.includes('range(1, 3)') || resident.cypher.includes('range(1, 2)'));
 });
 
+test('the reset button appears on edit and restores the generated query', async () => {
+  const { window: w } = await loadPage();
+  await dropModel(w, specModel());
+  const ta = [...w.document.querySelectorAll('.tree-item textarea')]
+    .find(t => t.value.includes('MERGE (n:Organisation'));
+  const generated = ta.value;
+  const resetBtn = ta.parentElement.querySelector('.reset-btn');
+  assert.ok(!resetBtn.classList.contains('visible'), 'reset button hidden before any edit');
+
+  ta.value = '// my custom query';
+  ta.dispatchEvent(new w.Event('input'));
+  assert.ok(resetBtn.classList.contains('visible'), 'reset button shown after edit');
+
+  resetBtn.click();
+  assert.equal(ta.value, generated);
+  assert.ok(!ta.classList.contains('edited'), 'orange border cleared after reset');
+  assert.ok(!resetBtn.classList.contains('visible'), 'reset button hidden after reset');
+});
+
+test('reset regenerates at the current scale and re-enables scale updates', async () => {
+  const { window: w } = await loadPage();
+  await dropModel(w, specModel());
+  const ta = [...w.document.querySelectorAll('.tree-item textarea')]
+    .find(t => t.value.includes('MERGE (n:Organisation'));
+  ta.value = '// my custom query';
+  ta.dispatchEvent(new w.Event('input'));
+
+  // reset while the slider is at 50% -> regenerated with the scaled count
+  setScale(w, 50);
+  ta.parentElement.querySelector('.reset-btn').click();
+  assert.ok(ta.value.includes('UNWIND range(1, 50000) AS i'));
+
+  // after reset, the item follows scale changes again
+  setScale(w, 200);
+  assert.ok(ta.value.includes('UNWIND range(1, 200000) AS i'));
+});
+
+test('reset restores the original text of static items (constraints/indexes)', async () => {
+  const { window: w } = await loadPage();
+  await dropModel(w, specModel());
+  const ta = [...w.document.querySelectorAll('.tree-item textarea')]
+    .find(t => t.value.includes('REQUIRE n.synthetic_id IS NODE KEY'));
+  const original = ta.value;
+  ta.value = 'DROP EVERYTHING';
+  ta.dispatchEvent(new w.Event('input'));
+  ta.parentElement.querySelector('.reset-btn').click();
+  assert.equal(ta.value, original);
+});
+
 test('the group checkbox toggles all child items', async () => {
   const { window: w } = await loadPage();
   await dropModel(w, specModel());

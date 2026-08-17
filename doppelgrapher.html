@@ -256,6 +256,20 @@
     .tree-item textarea:focus { outline: 1px solid var(--accent); }
     .tree-item textarea.edited { border-color: rgba(255,196,106,0.5); }
 
+    .reset-btn {
+      display: none;
+      margin-left: auto;
+      padding: 2px 8px;
+      font-size: 11px;
+      font-weight: 600;
+      border-radius: 8px;
+      color: var(--warn);
+      border-color: rgba(255,196,106,0.5);
+      background: rgba(255,196,106,0.08);
+    }
+    .reset-btn.visible { display: inline-block; }
+    .reset-btn:hover { background: rgba(255,196,106,0.16); }
+
     input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px; cursor: pointer; }
 
     .progress-zone { margin-top: 14px; display: none; }
@@ -1024,6 +1038,7 @@ ${normalRandBlock(2)}
           group, name, meta: meta || '',
           gen,                       // (factor) => cypher string, or null for static
           cypher: gen ? gen(scaleFactor()) : (opts.cypher || ''),
+          original: gen ? null : (opts.cypher || ''),   // pristine text for static items
           checked: opts.checked !== false,
           edited: false,
           note: opts.note || ''
@@ -1198,6 +1213,14 @@ ${normalRandBlock(2)}
             note.textContent = '— ' + item.note;
             head.appendChild(note);
           }
+
+          const resetBtn = document.createElement('button');
+          resetBtn.type = 'button';
+          resetBtn.className = 'reset-btn';
+          resetBtn.textContent = '↺ reset';
+          resetBtn.title = 'Restore the generated query (discard edits)';
+          resetBtn.dataset.resetFor = item.id;
+          head.appendChild(resetBtn);
           div.appendChild(head);
 
           const ta = document.createElement('textarea');
@@ -1209,6 +1232,14 @@ ${normalRandBlock(2)}
             item.cypher = ta.value;
             item.edited = true;
             ta.classList.add('edited');
+            resetBtn.classList.add('visible');
+          });
+          resetBtn.addEventListener('click', () => {
+            item.cypher = item.gen ? item.gen(scaleFactor()) : item.original;
+            item.edited = false;
+            ta.value = item.cypher;
+            ta.classList.remove('edited');
+            resetBtn.classList.remove('visible');
           });
           div.appendChild(ta);
 
