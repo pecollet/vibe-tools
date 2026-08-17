@@ -50,9 +50,16 @@ jobs:
 
       - uses: actions/configure-pages@v5
 
+      # Same build as the automatic "pages build and deployment" workflow:
+      # Jekyll renders README.md into the site's index page.
+      - uses: actions/jekyll-build-pages@v1
+        with:
+          source: .
+          destination: ./_site
+
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: .
+          path: ./_site
 
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
