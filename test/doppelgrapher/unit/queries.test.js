@@ -28,6 +28,18 @@ test('nodeQuery quotes labels with special characters', async () => {
   assert.ok(q.includes('MERGE (n:`My Label` {synthetic_id: i})'));
 });
 
+test('nodeQuery adds implied labels (label existence constraints) in the SET clause', async () => {
+  const w = await getWindow();
+  const q = w.nodeQuery('Pet', 10, ['n.name = left(randomUUID(), 8)'], ['Resident', 'Animal']);
+  assert.ok(q.includes('SET n:Resident:Animal, n.name = left(randomUUID(), 8)'));
+  // with no properties, the SET clause still carries the labels
+  const q2 = w.nodeQuery('Pet', 10, [], ['Resident']);
+  assert.ok(q2.includes('SET n:Resident'));
+  // implied labels are quoted when needed
+  const q3 = w.nodeQuery('Pet', 10, [], ['My Label']);
+  assert.ok(q3.includes('SET n:`My Label`'));
+});
+
 test('relQuerySimple follows the normal-distribution pattern with 1-based ids', async () => {
   const w = await getWindow();
   const q = w.relQuerySimple('LOVES', 'Person', 'City', 42, ['r.since = date()']);

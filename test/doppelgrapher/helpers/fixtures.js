@@ -122,7 +122,16 @@ function smallDbModel() {
         provenance: 'both',
         properties: [{ key: 'name', type: 'String', indexTypes: [], constraintTypes: ['Existence', 'PropertyType'], indexed: false }],
         label: 'Person', impliedLabels: [], count: 50
-      }
+      },
+      // implied label constraint (graph type node element type): every Robot is a Machine.
+      // Robot is deliberately not a relationship endpoint: implied labels make
+      // synthetic_id ambiguous across the overlapping labels.
+      Robot: {
+        provenance: 'both',
+        properties: [{ key: 'serial', type: 'String', indexTypes: [], constraintTypes: [], indexed: false }],
+        label: 'Robot', impliedLabels: ['Machine'], count: 20
+      },
+      Machine: { provenance: 'both', properties: [], label: 'Machine', impliedLabels: [], count: 0 }
     },
     relationshipTypes: {
       // 1-n: split into one query per source label

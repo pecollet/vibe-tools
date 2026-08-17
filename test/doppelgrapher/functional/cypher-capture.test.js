@@ -79,6 +79,9 @@ test('node queries use the counts from the source statistics', async () => {
   assert.ok(org.includes('n.del_indc ='));
   assert.ok(org.includes('n.nme ='));
   assert.ok(!org.includes('SET n.synthetic_id'));
+  // implied label constraints: Person nodes must also get the Resident label
+  const person = nodeCyphers.find(c => c.includes('(n:Person'));
+  assert.ok(person.includes('SET n:Resident'), person);
   // zero/null count labels are unchecked by default and must not run
   assert.ok(!nodeCyphers.some(c => c.includes('(n:Animal') || c.includes('(n:Pet') || c.includes('(n:Resolved_Entity')));
 });

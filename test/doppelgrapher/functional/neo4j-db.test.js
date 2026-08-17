@@ -95,10 +95,22 @@ test('ingests a synthetic graph into a real Neo4j and the written data matches t
     };
     try {
       // --- node counts match the model exactly ---
-      for (const [label, entity] of Object.entries(model.nodeLabels)) {
+      // A label's node count includes the nodes of labels that imply it.
+      const expectedNodeCount = (label) => {
+        let total = model.nodeLabels[label].count || 0;
+        for (const [other, entity] of Object.entries(model.nodeLabels)) {
+          if (other !== label && (entity.impliedLabels || []).includes(label)) total += entity.count || 0;
+        }
+        return total;
+      };
+      for (const label of Object.keys(model.nodeLabels)) {
         const count = await single(`MATCH (n:${label}) RETURN count(n)`);
-        assert.equal(count, entity.count, `node count for :${label}`);
+        assert.equal(count, expectedNodeCount(label), `node count for :${label}`);
       }
+
+      // --- implied label constraints honored: every Robot also carries :Machine ---
+      const robotsWithoutMachine = await single('MATCH (n:Robot) WHERE NOT n:Machine RETURN count(n)');
+      assert.equal(robotsWithoutMachine, 0);
 
       // --- synthetic_id covers 1..count with no gaps or duplicates ---
       const idStats = await session.run(

@@ -994,8 +994,11 @@ LET sigma = 0.166 // lower = narrower, higher = wider (6-sigma bell curve fits i
       return `IN TRANSACTIONS OF ${ingestSettings.relsBatchSize} ROWS`;
     }
 
-    function nodeQuery(label, count, setAssignments) {
-      const setLine = setAssignments.length ? `\n  SET ${setAssignments.join(', ')}` : '';
+    function nodeQuery(label, count, setAssignments, impliedLabels = []) {
+      // Implied label constraints (graph type): every node must also carry the extra labels
+      const setItems = impliedLabels.length ? [`n${impliedLabels.map(l => ':' + ident(l)).join('')}`] : [];
+      setItems.push(...setAssignments);
+      const setLine = setItems.length ? `\n  SET ${setItems.join(', ')}` : '';
       return (
 `UNWIND range(1, ${count}) AS i
 CALL (i) {
@@ -1296,7 +1299,8 @@ ${d.randBlocks}  WITH srcLabel, tgtLabel, toInteger(${d.srcRand} * sourceCount) 
       for (const [label, entity] of Object.entries(model.nodeLabels || {})) {
         const baseCount = entity.count;
         const setAssignments = buildSetAssignments(entity, 'n', baseCount, 'i');
-        const gen = () => nodeQuery(label, scaled(baseCount), setAssignments);
+        const impliedLabels = (entity.impliedLabels || []).filter(Boolean);
+        const gen = () => nodeQuery(label, scaled(baseCount), setAssignments, impliedLabels);
         const hasCount = baseCount !== null && baseCount !== undefined && baseCount > 0;
         mkItem('nodes', label, () => `${fmt(scaled(baseCount))} nodes`, gen, {
           checked: hasCount,
