@@ -367,6 +367,16 @@
       font-family: inherit;
     }
     .modal input[type="number"]:focus { outline: 1px solid var(--accent); }
+    .modal select {
+      background: rgba(0,0,0,0.25);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 10px 12px;
+      border-radius: 10px;
+      font-size: 13px;
+      font-family: inherit;
+    }
+    .modal select:focus { outline: 1px solid var(--accent); }
     .modal .field-hint { font-size: 11px; color: var(--muted); font-weight: 400; }
     .modal .btns { justify-content: flex-end; margin-top: 8px; }
   </style>
@@ -459,6 +469,13 @@
         <input type="number" id="settingNodesConcurrency" min="1" step="1" placeholder="server default" />
         <span class="field-hint">If set, node queries use IN N CONCURRENT TRANSACTIONS; empty = let the server decide</span>
       </label>
+      <label class="field">Relationship source/target distribution
+        <select id="settingRelDistribution">
+          <option value="normal" selected>normal</option>
+          <option value="uniform">uniform</option>
+        </select>
+        <span class="field-hint">How endpoint nodes are picked: normal (bell curve, some nodes far more connected) or uniform (plain rand(), simpler queries)</span>
+      </label>
       <div class="btns">
         <button type="button" id="btnSettingsCancel">Cancel</button>
         <button type="button" id="btnSettingsSave" class="primary">Save</button>
@@ -494,6 +511,7 @@
     const elSettingNodesBatch = document.getElementById('settingNodesBatch');
     const elSettingRelsBatch = document.getElementById('settingRelsBatch');
     const elSettingNodesConcurrency = document.getElementById('settingNodesConcurrency');
+    const elSettingRelDistribution = document.getElementById('settingRelDistribution');
     const elBtnSettingsSave = document.getElementById('btnSettingsSave');
     const elBtnSettingsCancel = document.getElementById('btnSettingsCancel');
     const elTree = document.getElementById('tree');
@@ -515,7 +533,8 @@
     const ingestSettings = {
       nodesBatchSize: 1000,           // ... TRANSACTIONS OF N ROWS in node queries
       relsBatchSize: 1000,            // IN TRANSACTIONS OF N ROWS in relationship queries
-      nodesConcurrency: null          // if set: IN N CONCURRENT TRANSACTIONS (else server default)
+      nodesConcurrency: null,         // if set: IN N CONCURRENT TRANSACTIONS (else server default)
+      relDistribution: 'normal'       // endpoint picking: 'normal' (bell curve) or 'uniform' (plain rand())
     };
 
     const LS_URL = 'doppelgrapher.neo4jUrl';
@@ -977,12 +996,26 @@ CALL (i) {
 } ${nodeTxSuffix()}`);
     }
 
+    // Endpoint-picking pieces, depending on the configured distribution:
+    // 'normal' uses the Box-Muller bell curve (mu/sigma/normal_randN_capped),
+    // 'uniform' just uses rand() and needs none of those LET clauses.
+    function relDistParts() {
+      const uniform = ingestSettings.relDistribution === 'uniform';
+      return {
+        init: uniform ? '' : NORMAL_INIT + '\n',                                    // mu/sigma preamble
+        callVars: uniform ? '' : ', mu, sigma',                                     // extra CALL scope vars
+        randBlocks: uniform ? '' : `${normalRandBlock(1)}\n${normalRandBlock(2)}\n`,
+        srcRand: uniform ? 'rand()' : 'normal_rand1_capped',
+        tgtRand: uniform ? 'rand()' : 'normal_rand2_capped'
+      };
+    }
+
     // Unambiguous case (single source label, single target label)
     function relQuerySimple(type, sourceLabel, targetLabel, count, setAssignments) {
       const setLine = setAssignments.length ? `\n  SET ${setAssignments.join(', ')}` : '';
+      const d = relDistParts();
       return (
-`${NORMAL_INIT}
-CALL () {
+`${d.init}CALL () {
   MATCH (s:${ident(sourceLabel)})
   RETURN count(s) AS sourceCount
 }
@@ -991,10 +1024,8 @@ CALL () {
   RETURN count(t) AS targetCount
 }
 UNWIND range(1, ${count}) AS i
-CALL (i, sourceCount, targetCount, mu, sigma) {
-${normalRandBlock(1)}
-${normalRandBlock(2)}
-  WITH i, toInteger(normal_rand1_capped * sourceCount) + 1 AS s_id, toInteger(normal_rand2_capped * targetCount) + 1 AS t_id
+CALL (i, sourceCount, targetCount${d.callVars}) {
+${d.randBlocks}  WITH i, toInteger(${d.srcRand} * sourceCount) + 1 AS s_id, toInteger(${d.tgtRand} * targetCount) + 1 AS t_id
   MATCH (s:${ident(sourceLabel)} {synthetic_id: s_id})
   MATCH (t:${ident(targetLabel)} {synthetic_id: t_id})
   MERGE (s)-[r:${ident(type)}]->(t)${setLine}
@@ -1008,9 +1039,9 @@ ${normalRandBlock(2)}
     // Ambiguous n-n case: several source labels AND several target labels.
     function relQueryAmbiguous(type, sources, targets, setAssignments) {
       const setLine = setAssignments.length ? `\n  SET ${setAssignments.join(', ')}` : '';
+      const d = relDistParts();
       return (
-`${NORMAL_INIT}
-LET sources = ${cypherMap(sources)}
+`${d.init}LET sources = ${cypherMap(sources)}
 LET targets = ${cypherMap(targets)}
 LET totalRelCount = reduce(sum = 0, k IN keys(targets) | sum + targets[k])
 CALL (sources) {
@@ -1033,7 +1064,7 @@ CALL (targets) {
 UNWIND keys(sources) AS srcLabel
 LET c = sources[srcLabel]
 UNWIND range(1, c) AS i
-CALL (srcLabel, targets, sources_totals, targets_totals, mu, sigma, totalRelCount) {
+CALL (srcLabel, targets, sources_totals, targets_totals, totalRelCount${d.callVars}) {
   // 1. select a tgtLabel from targets (weighted random pick)
   LET randNum = rand() * totalRelCount
   LET randomPick = reduce(acc = {currentSum: 0, picked: null}, tgtLbl IN keys(targets) |
@@ -1047,9 +1078,7 @@ CALL (srcLabel, targets, sources_totals, targets_totals, mu, sigma, totalRelCoun
   // 2. pick the random source/target nodes within all nodes of the picked labels
   LET sourceCount = [s IN sources_totals WHERE s.label = srcLabel | s.count][0]
   LET targetCount = [t IN targets_totals WHERE t.label = tgtLabel | t.count][0]
-${normalRandBlock(1)}
-${normalRandBlock(2)}
-  WITH srcLabel, tgtLabel, toInteger(normal_rand1_capped * sourceCount) + 1 AS s_id, toInteger(normal_rand2_capped * targetCount) + 1 AS t_id
+${d.randBlocks}  WITH srcLabel, tgtLabel, toInteger(${d.srcRand} * sourceCount) + 1 AS s_id, toInteger(${d.tgtRand} * targetCount) + 1 AS t_id
   MATCH (s:$(srcLabel) {synthetic_id: s_id})
   MATCH (t:$(tgtLabel) {synthetic_id: t_id})
   MERGE (s)-[r:${ident(type)}]->(t)${setLine}
@@ -1470,6 +1499,7 @@ ${normalRandBlock(2)}
       elSettingNodesBatch.value = String(ingestSettings.nodesBatchSize);
       elSettingRelsBatch.value = String(ingestSettings.relsBatchSize);
       elSettingNodesConcurrency.value = ingestSettings.nodesConcurrency === null ? '' : String(ingestSettings.nodesConcurrency);
+      elSettingRelDistribution.value = ingestSettings.relDistribution;
       elSettingsOverlay.classList.add('open');
     }
 
@@ -1492,6 +1522,7 @@ ${normalRandBlock(2)}
       ingestSettings.nodesConcurrency = elSettingNodesConcurrency.value.trim() === ''
         ? null
         : positiveInt(elSettingNodesConcurrency.value, null);
+      ingestSettings.relDistribution = elSettingRelDistribution.value === 'uniform' ? 'uniform' : 'normal';
       closeSettings();
       regenerateQueries();
     });
