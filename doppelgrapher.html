@@ -580,8 +580,8 @@
     ]);
 
     const ensureNeo4j = () => ensureLib('neo4j', [
-      'https://cdn.jsdelivr.net/npm/neo4j-driver@5.28.1/lib/browser/neo4j-web.min.js',
-      'https://unpkg.com/neo4j-driver@5.28.1/lib/browser/neo4j-web.min.js'
+      'https://cdn.jsdelivr.net/npm/neo4j-driver@6.2.0/lib/browser/neo4j-web.min.js',
+      'https://unpkg.com/neo4j-driver@6.2.0/lib/browser/neo4j-web.min.js'
     ]);
 
     async function initSqlJsOnce() {
@@ -865,9 +865,14 @@
         const neo4j = await ensureNeo4j();
         if (driver) { try { await driver.close(); } catch (e) { /* ignore */ } }
         driver = neo4j.driver(url, neo4j.auth.basic(user, password));
-        const info = await driver.verifyConnectivity({ database });
+        // driver 6.x: verifyConnectivity() resolves undefined; getServerInfo() both
+        // verifies connectivity and returns the server details
+        const info = await driver.getServerInfo({ database });
+        const proto = info.protocolVersion && typeof info.protocolVersion === 'object'
+          ? `${info.protocolVersion.major}.${info.protocolVersion.minor}`
+          : info.protocolVersion;
         elS2Ok.textContent = '✅';
-        setStatus(elConnStatus, `Connected to ${info.address}, database "${database}" (${info.agent}, protocol ${info.protocolVersion}).`, 'good');
+        setStatus(elConnStatus, `Connected to ${info.address}, database "${database}" (${info.agent}, protocol ${proto}).`, 'good');
         localStorage.setItem(LS_URL, url);
         localStorage.setItem(LS_USER, user);
         localStorage.setItem(LS_DATABASE, database);

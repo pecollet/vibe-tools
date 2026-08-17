@@ -11,7 +11,7 @@
   "dependencies": {
     "jsdom": "^25.0.1",
     "jszip": "^3.10.1",
-    "neo4j-driver": "^5.28.1",
+    "neo4j-driver": "^6.2.0",
     "sql.js": "^1.11.0",
     "testcontainers": "^10.13.2"
   }

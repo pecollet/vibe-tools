@@ -133,16 +133,17 @@ function readTree(window) {
 /**
  * A stub of the neo4j-driver browser global. Records every session.run() into
  * `record` as {cypher, database}. opts.failOn: substring that makes run() throw.
- * opts.failConnect: makes verifyConnectivity reject.
+ * opts.failConnect: makes the connectivity check reject.
  */
 function stubNeo4j(record = [], opts = {}) {
   return {
     record,
     auth: { basic: (user, password) => ({ scheme: 'basic', user, password }) },
     driver: (url, auth) => ({
-      verifyConnectivity: async ({ database } = {}) => {
+      // driver 6.x API: getServerInfo() verifies connectivity and returns the details
+      getServerInfo: async ({ database } = {}) => {
         if (opts.failConnect) throw new Error('stub connection refused');
-        return { address: 'stub:7687', agent: 'Neo4j/stub', protocolVersion: 5.7 };
+        return { address: 'stub:7687', agent: 'Neo4j/stub', protocolVersion: { major: 6, minor: 1 } };
       },
       close: async () => {},
       session: ({ database } = {}) => ({
