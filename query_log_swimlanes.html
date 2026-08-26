@@ -24,6 +24,15 @@
     button.danger:hover { border-color: rgba(255,90,106,0.9); }
     .pill { display:inline-flex; gap:8px; align-items:center; padding:8px 10px; border-radius:999px; background: rgba(231,238,252,0.06); border:1px solid var(--border); color: var(--muted); font-size:12px; }
     .pill b { color: var(--text); }
+    .field { display:flex; flex-direction:column; gap:6px; margin-top:12px; }
+    .field label { font-size:12px; color: var(--muted); font-weight:600; }
+    .field input[type="text"] {
+      width:100%; padding:10px 12px; border-radius:12px; border:1px solid var(--border);
+      background: rgba(231,238,252,0.06); color: var(--text); font-size:12px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    }
+    .field input[type="text"]:focus { outline: none; border-color: rgba(103,163,255,0.7); }
+    .field input[type="text"].invalid { border-color: rgba(255,90,106,0.9); }
     .small { color: var(--muted); font-size:12px; line-height:1.35; margin-top:10px; }
     .note { padding:10px 12px; border-radius:14px; border:1px solid var(--border); background: rgba(231,238,252,0.04); color: var(--muted); font-size:12px; line-height:1.45; margin-top:10px; }
     .footer { margin-top:10px; color: var(--muted); font-size:12px; line-height:1.4; }
@@ -31,12 +40,20 @@
     .chart { height: calc(100vh - 90px); min-height: 560px; }
     .toast { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); padding: 10px 12px; border-radius: 999px; border: 1px solid var(--border); background: rgba(18,26,39,0.95); color: var(--text); font-size: 12px; box-shadow: 0 14px 40px rgba(0,0,0,0.45); opacity: 0; pointer-events: none; transition: 160ms ease; }
     .toast.show { opacity: 1; }
+    .ytick, .ytick text { cursor: pointer; pointer-events: all; }
+    .ytick:hover text { fill: #67a3ff !important; }
+    .modal { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; padding: 18px; background: rgba(6,9,18,0.72); z-index: 40; }
+    .modal.show { display: flex; }
+    .modal-card { width: min(980px, 100%); max-height: 80vh; overflow: auto; background: rgba(18,26,39,0.98); border: 1px solid var(--border); border-radius: 16px; padding: 14px; box-shadow: 0 18px 50px rgba(0,0,0,0.45); }
+    .modal-hd { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+    .modal-hd b { font-size: 13px; }
+    .modal-card pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-size: 12px; line-height: 1.45; color: var(--text); }
   </style>
 </head>
 <body>
   <header>
     <h1>Query log swimlanes (Plotly)</h1>
-    <p class="sub">Drop one or more log files (JSONL or text). Hover a bar to see the raw start/end lines. Click a bar to copy the <span class="mono">query</span> to your clipboard.</p>
+    <p class="sub">Drop one or more log files (JSONL or text). Hover a bar to see the raw start/end lines. Click a bar to copy the <span class="mono">query</span>. Click a lane label to view the full log line.</p>
   </header>
 
   <main>
@@ -58,6 +75,12 @@
         <span class="pill">Intervals: <b id="intervalCount">0</b></span>
       </div>
 
+      <div class="field">
+        <label for="cypherFilter">Log filter (regex)</label>
+        <input id="cypherFilter" type="text" placeholder="e.g. MATCH.*Person" spellcheck="false" autocomplete="off" />
+        <div class="small" style="margin-top:0;">Case-insensitive regex against the full log line. Empty = show all.</div>
+      </div>
+
       <div class="note">
         <div style="font-weight:700; margin-bottom:6px;">Hardcoded parsing rules</div>
         <ul style="margin:0; padding-left: 18px;">
@@ -65,7 +88,7 @@
           <li><b>Text</b>: timestamp parsed from the beginning of the line. Start when line contains <span class="mono">"Query started"</span>. End is the next non-start line. Correlation id extracted from <span class="mono">id:123</span>. Query derived as: take text after <span class="mono">"&gt;"</span>, split by <span class="mono">" - "</span>, take the 3rd element.</li>
           <li>If a file has <b>no start entries</b> (completed-only), start is inferred as end timestamp minus elapsed time (text: <span class="mono">- 2 ms:</span>; JSON: <span class="mono">elapsedTimeMs</span>).</li>
           <li>Failure bars red when end indicates failure (JSON: event contains <span class="mono">fail</span>; text: end line contains fail/error/exception).</li>
-          <li>Lane labels truncated to 25 characters (full query still copied on click and shown on hover).</li>
+          <li>Lane labels truncated to 25 characters. Click a label to open the full log line.</li>
         </ul>
       </div>
 
@@ -78,6 +101,18 @@
   </main>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <div id="linePopup" class="modal" role="dialog" aria-modal="true" aria-labelledby="linePopupTitle">
+    <div class="modal-card">
+      <div class="modal-hd">
+        <b id="linePopupTitle">Log line</b>
+        <div class="row">
+          <button type="button" id="linePopupCopy">Copy</button>
+          <button type="button" id="linePopupClose">Close</button>
+        </div>
+      </div>
+      <pre id="linePopupBody" class="mono"></pre>
+    </div>
+  </div>
 
 <script>
   function isProbablyJsonl(text) {
@@ -144,6 +179,45 @@
     return new Date(endDate.getTime() - ms);
   }
 
+  function compileQueryFilter(pattern) {
+    const s = (pattern || "").trim();
+    if (!s) return { re: null, error: null };
+    try {
+      return { re: new RegExp(s, "i"), error: null };
+    } catch (e) {
+      return { re: null, error: e && e.message ? e.message : "Invalid regex" };
+    }
+  }
+
+  function filterIntervals(list, re) {
+    if (!re) return list;
+    return list.filter(iv => re.test(iv.filterText || iv.endLine || ""));
+  }
+
+  function yKeyFor(iv, i) {
+    const label = (iv.laneLabel && iv.laneLabel !== "(query)") ? iv.laneLabel : `Q${i + 1}`;
+    return `${i + 1}. ${label}`;
+  }
+
+  function makeInterval({ query, start, end, failed, sourceFile, startLine, endLine, inferredElapsedMs }) {
+    const startL = startLine || "";
+    const endL = endLine || "";
+    return {
+      query,
+      laneLabel: truncate(query || "(query)", 25),
+      start,
+      end,
+      failed,
+      startLine: startL,
+      endLine: endL,
+      filterText: [startL, endL].filter(Boolean).join("\n"),
+      hover: startL
+        ? `START: ${startL}\nEND:   ${endL}`
+        : `START: (inferred: end − ${inferredElapsedMs ?? 0} ms)\nEND:   ${endL}`,
+      sourceFile,
+    };
+  }
+
   async function copyToClipboard(text) {
     if (!text) return false;
     try {
@@ -172,6 +246,56 @@
     el.classList.add("show");
     clearTimeout(el.__t);
     el.__t = setTimeout(() => el.classList.remove("show"), 1200);
+  }
+
+  function popupText(iv) {
+    if (!iv) return "";
+    if (iv.startLine && iv.endLine) return `START:\n${iv.startLine}\n\nEND:\n${iv.endLine}`;
+    return iv.endLine || iv.filterText || "";
+  }
+
+  function showLogPopup(iv) {
+    const modal = document.getElementById("linePopup");
+    const body = document.getElementById("linePopupBody");
+    const text = popupText(iv);
+    body.textContent = text || "(empty log line)";
+    modal.classList.add("show");
+    modal.__text = text;
+  }
+
+  function hideLogPopup() {
+    document.getElementById("linePopup").classList.remove("show");
+  }
+
+  function intervalByYLabel(label) {
+    const key = (label || "").replace(/\s+/g, " ").trim();
+    if (!key) return null;
+    const idx = intervals.findIndex((iv, i) => yKeyFor(iv, i).replace(/\s+/g, " ").trim() === key);
+    return idx >= 0 ? intervals[idx] : null;
+  }
+
+  function intervalFromLabelClick(gd, e) {
+    const tick = e.target.closest && e.target.closest(".ytick");
+    if (tick) {
+      const fromTick = intervalByYLabel(tick.textContent);
+      if (fromTick) return fromTick;
+    }
+    const layout = gd._fullLayout;
+    if (!layout || !layout.xaxis || !layout.yaxis) return null;
+    const xa = layout.xaxis;
+    const ya = layout.yaxis;
+    const rect = gd.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    if (xa._offset == null || ya._offset == null || ya._length == null) return null;
+    if (x >= xa._offset) return null;
+    if (y < ya._offset || y > ya._offset + ya._length) return null;
+    if (typeof ya.p2d !== "function") return null;
+    try {
+      return intervalByYLabel(String(ya.p2d(y - ya._offset)));
+    } catch {
+      return null;
+    }
   }
 
   function parseFiles(files) {
@@ -216,15 +340,15 @@
         if (!isEnd) return;
         const elapsedMs = extractJsonElapsedMs(obj) ?? 0;
         const start = inferredStart(t, elapsedMs);
-        intervals.push({
+        intervals.push(makeInterval({
           query,
-          laneLabel: truncate(query || "(query)", 25),
           start,
           end: t,
           failed: isFailure,
-          hover: `START: (inferred: end − ${elapsedMs} ms)\nEND:   ${rawLine}`,
           sourceFile,
-        });
+          endLine: rawLine,
+          inferredElapsedMs: elapsedMs,
+        }));
         return;
       }
 
@@ -239,15 +363,15 @@
 
       const st = open[idx];
       open.splice(idx, 1);
-      intervals.push({
+      intervals.push(makeInterval({
         query: st.query,
-        laneLabel: truncate(st.query || "(query)", 25),
         start: st.start,
         end: t,
         failed: isFailure,
-        hover: `START: ${st.startLine}\nEND:   ${rawLine}`,
         sourceFile: st.sourceFile,
-      });
+        startLine: st.startLine,
+        endLine: rawLine,
+      }));
     }
 
     function handleTextLine(rawLine, sourceFile, open, inferStarts) {
@@ -263,15 +387,15 @@
         const elapsedMs = extractTextElapsedMs(rawLine);
         if (elapsedMs == null) return;
         const start = inferredStart(t, elapsedMs);
-        intervals.push({
+        intervals.push(makeInterval({
           query,
-          laneLabel: truncate(query || "(query)", 25),
           start,
           end: t,
           failed: looksLikeFailure(rawLine),
-          hover: `START: (inferred: end − ${elapsedMs} ms)\nEND:   ${rawLine}`,
           sourceFile,
-        });
+          endLine: rawLine,
+          inferredElapsedMs: elapsedMs,
+        }));
         return;
       }
 
@@ -286,15 +410,15 @@
 
       const st = open[idx];
       open.splice(idx, 1);
-      intervals.push({
+      intervals.push(makeInterval({
         query: st.query,
-        laneLabel: truncate(st.query || "(query)", 25),
         start: st.start,
         end: t,
         failed: looksLikeFailure(rawLine),
-        hover: `START: ${st.startLine}\nEND:   ${rawLine}`,
         sourceFile: st.sourceFile,
-      });
+        startLine: st.startLine,
+        endLine: rawLine,
+      }));
     }
 
     for (const file of files) {
@@ -321,12 +445,14 @@
 
     if (!intervals.length) {
       Plotly.purge(container);
-      container.innerHTML = "<div style='padding:16px; color: rgba(231,238,252,0.75)'>No intervals parsed yet. Drop files on the left, then click Render.</div>";
+      const msg = allIntervals.length
+        ? "No log lines match the filter."
+        : "No intervals parsed yet. Drop files on the left, then click Render.";
+      container.innerHTML = "<div style='padding:16px; color: rgba(231,238,252,0.75)'>" + msg + "</div>";
       return;
     }
 
-    const laneNames = intervals.map((iv, i) => (iv.laneLabel && iv.laneLabel !== "(query)") ? iv.laneLabel : `Q${i + 1}`);
-    const y = laneNames;
+    const y = intervals.map((iv, i) => yKeyFor(iv, i));
     const base = intervals.map(iv => iv.start.toISOString());
     const x = intervals.map(iv => Math.max(0, iv.end - iv.start));
 
@@ -338,6 +464,9 @@
       sourceFile: iv.sourceFile,
       idx: i + 1,
       query: iv.query || "",
+      endLine: iv.endLine || "",
+      startLine: iv.startLine || "",
+      yKey: y[i],
     }));
 
     const colors = intervals.map(iv => iv.failed ? "#ff5a6a" : "#67a3ff");
@@ -360,11 +489,11 @@
     };
 
     const layout = {
-      margin: { l: 160, r: 20, t: 20, b: 50 },
+      margin: { l: 200, r: 20, t: 20, b: 50 },
       paper_bgcolor: "rgba(0,0,0,0)",
       plot_bgcolor: "rgba(0,0,0,0)",
       xaxis: { type: "date", title: "Time", gridcolor: "rgba(231,238,252,0.10)", zerolinecolor: "rgba(231,238,252,0.18)" },
-      yaxis: { title: "Queries (chronological)", gridcolor: "rgba(231,238,252,0.08)", automargin: true, autorange: "reversed" },
+      yaxis: { title: "Queries (chronological)", gridcolor: "rgba(231,238,252,0.08)", automargin: true, autorange: "reversed", fixedrange: true },
       bargap: 0.25,
       hoverlabel: { bgcolor: "rgba(18,26,39,0.98)", bordercolor: "rgba(231,238,252,0.20)", font: { color: "#e7eefc" } },
       showlegend: false,
@@ -389,8 +518,14 @@
   const intervalCount = document.getElementById("intervalCount");
   const renderBtn = document.getElementById("renderBtn");
   const clearBtn = document.getElementById("clearBtn");
+  const cypherFilter = document.getElementById("cypherFilter");
+  const linePopup = document.getElementById("linePopup");
+  const linePopupCopy = document.getElementById("linePopupCopy");
+  const linePopupClose = document.getElementById("linePopupClose");
+  const chartEl = document.getElementById("chart");
 
   let loadedFiles = [];
+  let allIntervals = [];
   let intervals = [];
 
   async function loadFiles(fileList) {
@@ -402,10 +537,23 @@
     fileCount.textContent = String(loadedFiles.length);
   }
 
-  function parseAndRender() {
-    intervals = parseFiles(loadedFiles);
-    intervalCount.textContent = String(intervals.length);
+  function applyFilterAndRender(showInvalidToast) {
+    const { re, error } = compileQueryFilter(cypherFilter.value);
+    cypherFilter.classList.toggle("invalid", !!error);
+    if (error) {
+      if (showInvalidToast) toast("Invalid regex");
+      return;
+    }
+    intervals = filterIntervals(allIntervals, re);
+    intervalCount.textContent = re
+      ? `${intervals.length} / ${allIntervals.length}`
+      : String(allIntervals.length);
     renderPlot(intervals);
+  }
+
+  function parseAndRender() {
+    allIntervals = parseFiles(loadedFiles);
+    applyFilterAndRender(true);
   }
 
   drop.addEventListener("click", () => fileInput.click());
@@ -429,12 +577,40 @@
   });
 
   renderBtn.addEventListener("click", parseAndRender);
+  cypherFilter.addEventListener("input", () => {
+    clearTimeout(cypherFilter.__t);
+    cypherFilter.__t = setTimeout(() => applyFilterAndRender(false), 120);
+  });
+  cypherFilter.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      applyFilterAndRender(true);
+    }
+  });
   clearBtn.addEventListener("click", () => {
     loadedFiles = [];
+    allIntervals = [];
     intervals = [];
     fileCount.textContent = "0";
     intervalCount.textContent = "0";
     renderPlot([]);
+  });
+
+  chartEl.addEventListener("click", (e) => {
+    const iv = intervalFromLabelClick(chartEl, e);
+    if (iv) showLogPopup(iv);
+  });
+
+  linePopupClose.addEventListener("click", hideLogPopup);
+  linePopup.addEventListener("click", (e) => { if (e.target === linePopup) hideLogPopup(); });
+  linePopupCopy.addEventListener("click", async () => {
+    const text = linePopup.__text || "";
+    if (!text) { toast("Nothing to copy"); return; }
+    const ok = await copyToClipboard(text);
+    toast(ok ? "Log line copied" : "Copy failed");
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && linePopup.classList.contains("show")) hideLogPopup();
   });
 
   renderPlot([]);
