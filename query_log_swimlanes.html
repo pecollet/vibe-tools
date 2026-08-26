@@ -85,7 +85,7 @@
         <div style="font-weight:700; margin-bottom:6px;">Hardcoded parsing rules</div>
         <ul style="margin:0; padding-left: 18px;">
           <li><b>JSONL</b>: timestamp from <span class="mono">time</span>. Start when <span class="mono">event</span> indicates start. End when <span class="mono">event</span> indicates success/failure. Correlation id is <span class="mono">id</span>. Lane label & grouping is <span class="mono">query</span>.</li>
-          <li><b>Text</b>: timestamp parsed from the beginning of the line. Start when line contains <span class="mono">"Query started"</span>. End is the next non-start line. Correlation id extracted from <span class="mono">id:123</span>. Query derived as: take text after <span class="mono">"&gt;"</span>, split by <span class="mono">" - "</span>, take the 3rd element.</li>
+          <li><b>Text</b>: a new message starts only when the line begins with a timestamp (continuation lines, including Cypher line breaks, are joined). Start when the message contains <span class="mono">"Query started"</span>. End is the next non-start message. Correlation id extracted from <span class="mono">id:123</span>. Query derived as: take text after <span class="mono">"&gt;"</span>, split by <span class="mono">" - "</span>, take the 3rd element.</li>
           <li>If a file has <b>no start entries</b> (completed-only), start is inferred as end timestamp minus elapsed time (text: <span class="mono">- 2 ms:</span>; JSON: <span class="mono">elapsedTimeMs</span>).</li>
           <li>Failure bars red when end indicates failure (JSON: event contains <span class="mono">fail</span>; text: end line contains fail/error/exception).</li>
           <li>Lane labels: truncated query text by default, or concatenated regex capture groups when the filter has any. Click a label to open the full log line.</li>
@@ -123,9 +123,10 @@
   }
 
   function parseTimeFromString(s) {
-    const t = Date.parse(s);
+    const first = (s || "").split(/\r?\n/, 1)[0];
+    const t = Date.parse(first);
     if (!Number.isNaN(t)) return new Date(t);
-    const m = s.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})([\.,](\d{1,6}))?/);
+    const m = first.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})([\.,](\d{1,6}))?/);
     if (m) {
       const datePart = m[1];
       const timePart = m[2];
@@ -135,6 +136,26 @@
       if (!Number.isNaN(t2)) return new Date(t2);
     }
     return null;
+  }
+
+  function lineStartsWithTimestamp(line) {
+    return /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})/.test(line || "");
+  }
+
+  function coalesceTextMessages(text) {
+    const physical = (text || "").split(/\r?\n/);
+    const messages = [];
+    let cur = null;
+    for (const line of physical) {
+      if (lineStartsWithTimestamp(line)) {
+        if (cur != null) messages.push(cur);
+        cur = line;
+      } else if (cur != null) {
+        cur += "\n" + line;
+      }
+    }
+    if (cur != null) messages.push(cur);
+    return messages;
   }
 
   function truncate(s, n) {
@@ -441,13 +462,15 @@
 
     for (const file of files) {
       const text = file.__text;
-      const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
       const jsonl = isProbablyJsonl(text);
+      const records = jsonl
+        ? text.split(/\r?\n/).filter(l => l.trim().length > 0)
+        : coalesceTextMessages(text);
       const open = [];
       const inferStarts = jsonl
-        ? !jsonFileHasStarts(lines)
-        : !lines.some(l => /query started/i.test(l));
-      for (const rawLine of lines) {
+        ? !jsonFileHasStarts(records)
+        : !records.some(l => /query started/i.test(l));
+      for (const rawLine of records) {
         if (jsonl) handleJsonLine(rawLine, file.name, open, inferStarts);
         else handleTextLine(rawLine, file.name, open, inferStarts);
       }
