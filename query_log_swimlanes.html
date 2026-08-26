@@ -63,6 +63,7 @@
         <ul style="margin:0; padding-left: 18px;">
           <li><b>JSONL</b>: timestamp from <span class="mono">time</span>. Start when <span class="mono">event</span> indicates start. End when <span class="mono">event</span> indicates success/failure. Correlation id is <span class="mono">id</span>. Lane label & grouping is <span class="mono">query</span>.</li>
           <li><b>Text</b>: timestamp parsed from the beginning of the line. Start when line contains <span class="mono">"Query started"</span>. End is the next non-start line. Correlation id extracted from <span class="mono">id:123</span>. Query derived as: take text after <span class="mono">"&gt;"</span>, split by <span class="mono">" - "</span>, take the 3rd element.</li>
+          <li>If a file has <b>no start entries</b> (completed-only), start is inferred as end timestamp minus elapsed time (text: <span class="mono">- 2 ms:</span>; JSON: <span class="mono">elapsedTimeMs</span>).</li>
           <li>Failure bars red when end indicates failure (JSON: event contains <span class="mono">fail</span>; text: end line contains fail/error/exception).</li>
           <li>Lane labels truncated to 25 characters (full query still copied on click and shown on hover).</li>
         </ul>
@@ -124,6 +125,25 @@
     return (parts[2] ?? "").trim();
   }
 
+  function extractTextElapsedMs(line) {
+    const s = line || "";
+    const m = s.match(/-\s*(\d+(?:\.\d+)?)\s*ms\s*:/i) || s.match(/\b(\d+(?:\.\d+)?)\s*ms\s*:/i);
+    return m ? Number(m[1]) : null;
+  }
+
+  function extractJsonElapsedMs(obj) {
+    if (!obj || typeof obj !== "object") return null;
+    const v = obj.elapsedTimeMs ?? obj.elapsedTimeMillis ?? obj.elapsed_ms;
+    if (v == null || v === "") return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  function inferredStart(endDate, elapsedMs) {
+    const ms = Number.isFinite(elapsedMs) ? elapsedMs : 0;
+    return new Date(endDate.getTime() - ms);
+  }
+
   async function copyToClipboard(text) {
     if (!text) return false;
     try {
@@ -155,37 +175,65 @@
   }
 
   function parseFiles(files) {
-    const open = [];
     const intervals = [];
 
-    function findOpenById(id) {
+    function findOpenById(open, id) {
       if (!id) return -1;
       for (let i = open.length - 1; i >= 0; i--) if (open[i].id === id) return i;
       return -1;
     }
 
-    function handleJsonLine(rawLine, sourceFile) {
+    function jsonEventFlags(obj) {
+      const ev = String(obj && obj.event != null ? obj.event : "").toLowerCase();
+      const isStart = ev === "start" || ev.includes("start");
+      const isSuccess = ev === "success" || ev.includes("success");
+      const isFailure = ev === "failure" || ev.includes("fail");
+      return { isStart, isSuccess, isFailure, isEnd: isSuccess || isFailure };
+    }
+
+    function jsonFileHasStarts(lines) {
+      for (const rawLine of lines) {
+        let obj;
+        try { obj = JSON.parse(rawLine); } catch { continue; }
+        if (jsonEventFlags(obj).isStart) return true;
+      }
+      return false;
+    }
+
+    function handleJsonLine(rawLine, sourceFile, open, inferStarts) {
       let obj;
       try { obj = JSON.parse(rawLine); } catch { return; }
       const t = obj && obj.time ? parseTimeFromString(String(obj.time)) : null;
       if (!t) return;
 
-      const ev = String(obj.event ?? "").toLowerCase();
-      const isStart = ev === "start" || ev.includes("start");
-      const isSuccess = ev === "success" || ev.includes("success");
-      const isFailure = ev === "failure" || ev.includes("fail");
-      const isEnd = isSuccess || isFailure;
+      const { isStart, isFailure, isEnd } = jsonEventFlags(obj);
       if (!isStart && !isEnd) return;
 
       const id = obj.id != null ? String(obj.id) : null;
       const query = obj.query != null ? String(obj.query) : "";
+
+      if (inferStarts) {
+        if (!isEnd) return;
+        const elapsedMs = extractJsonElapsedMs(obj) ?? 0;
+        const start = inferredStart(t, elapsedMs);
+        intervals.push({
+          query,
+          laneLabel: truncate(query || "(query)", 25),
+          start,
+          end: t,
+          failed: isFailure,
+          hover: `START: (inferred: end − ${elapsedMs} ms)\nEND:   ${rawLine}`,
+          sourceFile,
+        });
+        return;
+      }
 
       if (isStart) {
         open.push({ id, query, start: t, startLine: rawLine, sourceFile });
         return;
       }
 
-      let idx = findOpenById(id);
+      let idx = findOpenById(open, id);
       if (idx === -1 && open.length) idx = open.length - 1;
       if (idx === -1) return;
 
@@ -202,7 +250,7 @@
       });
     }
 
-    function handleTextLine(rawLine, sourceFile) {
+    function handleTextLine(rawLine, sourceFile, open, inferStarts) {
       const t = parseTimeFromString(rawLine);
       if (!t) return;
 
@@ -210,12 +258,29 @@
       const id = extractTextId(rawLine);
       const query = extractTextQuery(rawLine);
 
+      if (inferStarts) {
+        if (isStart) return;
+        const elapsedMs = extractTextElapsedMs(rawLine);
+        if (elapsedMs == null) return;
+        const start = inferredStart(t, elapsedMs);
+        intervals.push({
+          query,
+          laneLabel: truncate(query || "(query)", 25),
+          start,
+          end: t,
+          failed: looksLikeFailure(rawLine),
+          hover: `START: (inferred: end − ${elapsedMs} ms)\nEND:   ${rawLine}`,
+          sourceFile,
+        });
+        return;
+      }
+
       if (isStart) {
         open.push({ id, query, start: t, startLine: rawLine, sourceFile });
         return;
       }
 
-      let idx = findOpenById(id);
+      let idx = findOpenById(open, id);
       if (idx === -1 && open.length) idx = open.length - 1;
       if (idx === -1) return;
 
@@ -236,9 +301,13 @@
       const text = file.__text;
       const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
       const jsonl = isProbablyJsonl(text);
+      const open = [];
+      const inferStarts = jsonl
+        ? !jsonFileHasStarts(lines)
+        : !lines.some(l => /query started/i.test(l));
       for (const rawLine of lines) {
-        if (jsonl) handleJsonLine(rawLine, file.name);
-        else handleTextLine(rawLine, file.name);
+        if (jsonl) handleJsonLine(rawLine, file.name, open, inferStarts);
+        else handleTextLine(rawLine, file.name, open, inferStarts);
       }
     }
 
