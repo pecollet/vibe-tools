@@ -78,7 +78,7 @@
       <div class="field">
         <label for="cypherFilter">Log filter (regex)</label>
         <input id="cypherFilter" type="text" placeholder="e.g. MATCH.*Person" spellcheck="false" autocomplete="off" />
-        <div class="small" style="margin-top:0;">Case-insensitive against the full log line. Capture groups are concatenated as the lane label. Empty = show all.</div>
+        <div class="small" style="margin-top:0;">Case-insensitive against the full log message, including line breaks (<span class="mono">.</span> matches newlines). Capture groups are concatenated as the lane label. Empty = show all.</div>
       </div>
 
       <div class="note">
@@ -204,7 +204,7 @@
     const s = (pattern || "").trim();
     if (!s) return { re: null, error: null };
     try {
-      return { re: new RegExp(s, "i"), error: null };
+      return { re: new RegExp(s, "is"), error: null };
     } catch (e) {
       return { re: null, error: e && e.message ? e.message : "Invalid regex" };
     }
