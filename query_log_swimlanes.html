@@ -78,7 +78,7 @@
       <div class="field">
         <label for="cypherFilter">Log filter (regex)</label>
         <input id="cypherFilter" type="text" placeholder="e.g. MATCH.*Person" spellcheck="false" autocomplete="off" />
-        <div class="small" style="margin-top:0;">Case-insensitive regex against the full log line. Empty = show all.</div>
+        <div class="small" style="margin-top:0;">Case-insensitive against the full log line. Capture groups are concatenated as the lane label. Empty = show all.</div>
       </div>
 
       <div class="note">
@@ -88,7 +88,7 @@
           <li><b>Text</b>: timestamp parsed from the beginning of the line. Start when line contains <span class="mono">"Query started"</span>. End is the next non-start line. Correlation id extracted from <span class="mono">id:123</span>. Query derived as: take text after <span class="mono">"&gt;"</span>, split by <span class="mono">" - "</span>, take the 3rd element.</li>
           <li>If a file has <b>no start entries</b> (completed-only), start is inferred as end timestamp minus elapsed time (text: <span class="mono">- 2 ms:</span>; JSON: <span class="mono">elapsedTimeMs</span>).</li>
           <li>Failure bars red when end indicates failure (JSON: event contains <span class="mono">fail</span>; text: end line contains fail/error/exception).</li>
-          <li>Lane labels truncated to 25 characters. Click a label to open the full log line.</li>
+          <li>Lane labels: truncated query text by default, or concatenated regex capture groups when the filter has any. Click a label to open the full log line.</li>
         </ul>
       </div>
 
@@ -189,9 +189,27 @@
     }
   }
 
+  function labelFromCaptures(match, fallback) {
+    if (!match || match.length < 2) return fallback;
+    const parts = [];
+    for (let i = 1; i < match.length; i++) {
+      if (match[i] == null || match[i] === "") continue;
+      parts.push(String(match[i]));
+    }
+    if (!parts.length) return fallback;
+    return truncate(parts.join(" ").replace(/\s+/g, " ").trim(), 80);
+  }
+
   function filterIntervals(list, re) {
     if (!re) return list;
-    return list.filter(iv => re.test(iv.filterText || iv.endLine || ""));
+    const out = [];
+    for (const iv of list) {
+      re.lastIndex = 0;
+      const m = re.exec(iv.filterText || iv.endLine || "");
+      if (!m) continue;
+      out.push({ ...iv, laneLabel: labelFromCaptures(m, iv.laneLabel) });
+    }
+    return out;
   }
 
   function yKeyFor(iv, i) {
