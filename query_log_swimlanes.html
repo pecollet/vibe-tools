@@ -34,6 +34,11 @@
     .field input[type="text"]:focus { outline: none; border-color: rgba(103,163,255,0.7); }
     .field input[type="text"].invalid { border-color: rgba(255,90,106,0.9); }
     .small { color: var(--muted); font-size:12px; line-height:1.35; margin-top:10px; }
+    .legend { display: none; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+    .legend.show { display: flex; }
+    .legend-item { display: inline-flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 999px; border: 1px solid var(--border); background: rgba(231,238,252,0.04); color: var(--muted); font-size: 11px; max-width: 100%; }
+    .legend-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .swatch { width: 10px; height: 10px; border-radius: 999px; flex: 0 0 auto; box-shadow: 0 0 0 1px rgba(0,0,0,0.25); }
     .note { padding:10px 12px; border-radius:14px; border:1px solid var(--border); background: rgba(231,238,252,0.04); color: var(--muted); font-size:12px; line-height:1.45; margin-top:10px; }
     .footer { margin-top:10px; color: var(--muted); font-size:12px; line-height:1.4; }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
@@ -77,8 +82,10 @@
 
       <div class="field">
         <label for="cypherFilter">Log filter (regex)</label>
-        <input id="cypherFilter" type="text" placeholder="e.g. MATCH.*Person" spellcheck="false" autocomplete="off" />
-        <div class="small" style="margin-top:0;">Case-insensitive against the full log message, including line breaks (<span class="mono">.</span> matches newlines). Capture groups are concatenated as the lane label. Empty = show all.</div>
+        <input id="cypherFilter" type="text" list="filterHistory" placeholder="e.g. runtime:\s*(?&lt;color&gt;\w+)" spellcheck="false" autocomplete="off" />
+        <datalist id="filterHistory"></datalist>
+        <div class="small" style="margin-top:0;">Case-insensitive; <span class="mono">.</span> matches newlines. Capture groups become the lane label. Named group <span class="mono">(?&lt;color&gt;...)</span> colors bars by captured value. Empty = show all. Recent filters are saved and selectable from this box.</div>
+        <div id="colorLegend" class="legend" aria-label="Color legend"></div>
       </div>
 
       <div class="note">
@@ -87,8 +94,7 @@
           <li><b>JSONL</b>: timestamp from <span class="mono">time</span>. Start when <span class="mono">event</span> indicates start. End when <span class="mono">event</span> indicates success/failure. Correlation id is <span class="mono">id</span>. Lane label & grouping is <span class="mono">query</span>.</li>
           <li><b>Text</b>: a new message starts only when the line begins with a timestamp (continuation lines, including Cypher line breaks, are joined). Start when the message contains <span class="mono">"Query started"</span>. End is the next non-start message. Correlation id extracted from <span class="mono">id:123</span>. Query derived as: take text after <span class="mono">"&gt;"</span>, split by <span class="mono">" - "</span>, take the 3rd element.</li>
           <li>If a file has <b>no start entries</b> (completed-only), start is inferred as end timestamp minus elapsed time (text: <span class="mono">- 2 ms:</span>; JSON: <span class="mono">elapsedTimeMs</span>).</li>
-          <li>Failure bars red when end indicates failure (JSON: event contains <span class="mono">fail</span>; text: end line contains fail/error/exception).</li>
-          <li>Lane labels: truncated query text by default, or concatenated regex capture groups when the filter has any. Click a label to open the full log line.</li>
+          <li>Bar color: default blue, failures red. With <span class="mono">(?&lt;color&gt;...)</span>, each distinct captured value fully sets the bar color. Other capture groups still form the lane label. Click a label to open the full log line.</li>
         </ul>
       </div>
 
@@ -210,11 +216,74 @@
     }
   }
 
+  const FILTER_HISTORY_KEY = "query-log-swimlanes.filterHistory";
+  const FILTER_HISTORY_MAX = 10;
+
+  function loadFilterHistory() {
+    try {
+      const raw = localStorage.getItem(FILTER_HISTORY_KEY);
+      const arr = JSON.parse(raw);
+      if (!Array.isArray(arr)) return [];
+      return arr.map(s => String(s)).filter(s => s.trim().length > 0).slice(0, FILTER_HISTORY_MAX);
+    } catch {
+      return [];
+    }
+  }
+
+  function saveFilterHistory(items) {
+    try {
+      localStorage.setItem(FILTER_HISTORY_KEY, JSON.stringify(items.slice(0, FILTER_HISTORY_MAX)));
+    } catch {
+      // ignore quota / private-mode failures
+    }
+  }
+
+  function renderFilterHistory(items) {
+    const dl = document.getElementById("filterHistory");
+    if (!dl) return;
+    dl.innerHTML = "";
+    for (const s of items) {
+      const opt = document.createElement("option");
+      opt.value = s;
+      dl.appendChild(opt);
+    }
+  }
+
+  function rememberFilter(pattern) {
+    const s = (pattern || "").trim();
+    if (!s) return;
+    const { error } = compileQueryFilter(s);
+    if (error) return;
+    const items = loadFilterHistory().filter(x => x !== s);
+    items.unshift(s);
+    saveFilterHistory(items);
+    renderFilterHistory(items);
+  }
+
+  const COLOR_PALETTE = [
+    "#5b8def", "#3ecf8e", "#f4c95d", "#e07a5f", "#9b5de5",
+    "#00bbf9", "#f15bb5", "#80ed99", "#ff9f1c", "#48cae4",
+    "#c77dff", "#90be6d", "#f94144", "#577590", "#43aa8b",
+  ];
+
+  function namedGroupValue(match, name) {
+    const groups = match && match.groups;
+    if (!groups || !Object.prototype.hasOwnProperty.call(groups, name)) return null;
+    const v = groups[name];
+    return v == null || v === "" ? "(none)" : String(v);
+  }
+
   function labelFromCaptures(match, fallback) {
     if (!match || match.length < 2) return fallback;
+    const colorVal = match.groups && match.groups.color != null ? String(match.groups.color) : null;
+    let skippedColor = colorVal == null || colorVal === "";
     const parts = [];
     for (let i = 1; i < match.length; i++) {
       if (match[i] == null || match[i] === "") continue;
+      if (!skippedColor && String(match[i]) === colorVal) {
+        skippedColor = true;
+        continue;
+      }
       parts.push(String(match[i]));
     }
     if (!parts.length) return fallback;
@@ -228,9 +297,54 @@
       re.lastIndex = 0;
       const m = re.exec(iv.filterText || iv.endLine || "");
       if (!m) continue;
-      out.push({ ...iv, laneLabel: labelFromCaptures(m, iv.laneLabel) });
+      out.push({
+        ...iv,
+        laneLabel: labelFromCaptures(m, iv.laneLabel),
+        colorKey: namedGroupValue(m, "color"),
+      });
     }
     return out;
+  }
+
+  function colorMapFor(list) {
+    const keys = [];
+    const seen = new Set();
+    for (const iv of list) {
+      if (iv.colorKey == null) continue;
+      if (!seen.has(iv.colorKey)) {
+        seen.add(iv.colorKey);
+        keys.push(iv.colorKey);
+      }
+    }
+    if (!keys.length) return null;
+    keys.sort((a, b) => a.localeCompare(b));
+    const map = new Map();
+    keys.forEach((k, i) => map.set(k, COLOR_PALETTE[i % COLOR_PALETTE.length]));
+    return map;
+  }
+
+  function renderColorLegend(map) {
+    const el = document.getElementById("colorLegend");
+    if (!el) return;
+    el.innerHTML = "";
+    if (!map) {
+      el.classList.remove("show");
+      return;
+    }
+    for (const [key, color] of map.entries()) {
+      const item = document.createElement("div");
+      item.className = "legend-item";
+      const swatch = document.createElement("i");
+      swatch.className = "swatch";
+      swatch.style.background = color;
+      const label = document.createElement("span");
+      label.textContent = key;
+      label.title = key;
+      item.appendChild(swatch);
+      item.appendChild(label);
+      el.appendChild(item);
+    }
+    el.classList.add("show");
   }
 
   function yKeyFor(iv, i) {
@@ -486,6 +600,7 @@
 
     if (!intervals.length) {
       Plotly.purge(container);
+      renderColorLegend(null);
       const msg = allIntervals.length
         ? "No log lines match the filter."
         : "No intervals parsed yet. Drop files on the left, then click Render.";
@@ -496,6 +611,8 @@
     const y = intervals.map((iv, i) => yKeyFor(iv, i));
     const base = intervals.map(iv => iv.start.toISOString());
     const x = intervals.map(iv => Math.max(0, iv.end - iv.start));
+    const colorMap = colorMapFor(intervals);
+    renderColorLegend(colorMap);
 
     const customdata = intervals.map((iv, i) => ({
       hover: iv.hover,
@@ -508,9 +625,13 @@
       endLine: iv.endLine || "",
       startLine: iv.startLine || "",
       yKey: y[i],
+      colorKey: iv.colorKey || "",
     }));
 
-    const colors = intervals.map(iv => iv.failed ? "#ff5a6a" : "#67a3ff");
+    const colors = intervals.map(iv => {
+      if (colorMap && iv.colorKey != null) return colorMap.get(iv.colorKey) || COLOR_PALETTE[0];
+      return iv.failed ? "#ff5a6a" : "#67a3ff";
+    });
 
     const trace = {
       type: "bar",
@@ -526,6 +647,7 @@
         "End: %{customdata.end}<br>" +
         "Duration: %{customdata.durationMs} ms<br>" +
         "File: %{customdata.sourceFile}<br>" +
+        (colorMap ? "Color: %{customdata.colorKey}<br>" : "") +
         "<br><span style='white-space:pre-wrap'>%{customdata.hover}</span><extra></extra>",
     };
 
@@ -578,13 +700,14 @@
     fileCount.textContent = String(loadedFiles.length);
   }
 
-  function applyFilterAndRender(showInvalidToast) {
+  function applyFilterAndRender(showInvalidToast, remember) {
     const { re, error } = compileQueryFilter(cypherFilter.value);
     cypherFilter.classList.toggle("invalid", !!error);
     if (error) {
       if (showInvalidToast) toast("Invalid regex");
       return;
     }
+    if (remember) rememberFilter(cypherFilter.value);
     intervals = filterIntervals(allIntervals, re);
     intervalCount.textContent = re
       ? `${intervals.length} / ${allIntervals.length}`
@@ -594,7 +717,7 @@
 
   function parseAndRender() {
     allIntervals = parseFiles(loadedFiles);
-    applyFilterAndRender(true);
+    applyFilterAndRender(true, true);
   }
 
   drop.addEventListener("click", () => fileInput.click());
@@ -620,12 +743,13 @@
   renderBtn.addEventListener("click", parseAndRender);
   cypherFilter.addEventListener("input", () => {
     clearTimeout(cypherFilter.__t);
-    cypherFilter.__t = setTimeout(() => applyFilterAndRender(false), 120);
+    cypherFilter.__t = setTimeout(() => applyFilterAndRender(false, false), 120);
   });
+  cypherFilter.addEventListener("change", () => applyFilterAndRender(true, true));
   cypherFilter.addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
       e.preventDefault();
-      applyFilterAndRender(true);
+      applyFilterAndRender(true, true);
     }
   });
   clearBtn.addEventListener("click", () => {
@@ -653,6 +777,10 @@
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && linePopup.classList.contains("show")) hideLogPopup();
   });
+
+  const savedFilters = loadFilterHistory();
+  renderFilterHistory(savedFilters);
+  if (savedFilters[0]) cypherFilter.value = savedFilters[0];
 
   renderPlot([]);
 </script>
