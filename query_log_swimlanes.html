@@ -5,6 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Query Log Swimlanes</title>
   <script src="https://cdn.plot.ly/plotly-2.30.0.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/themes/dark.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/plugins/confirmDate/confirmDate.css">
+  <script src="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/plugins/confirmDate/confirmDate.js"></script>
   <style>
     :root { --bg:#0b0f17; --panel:#121a27; --text:#e7eefc; --muted:#9fb0d0; --accent:#67a3ff; --danger:#ff5a6a; --border:rgba(231,238,252,0.12); }
     * { box-sizing: border-box; }
@@ -33,6 +38,11 @@
     }
     .field input[type="text"]:focus { outline: none; border-color: rgba(103,163,255,0.7); }
     .field input[type="text"].invalid { border-color: rgba(255,90,106,0.9); }
+    .time-range { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .time-field { display: flex; flex-direction: column; gap: 4px; }
+    .time-field label { font-size: 11px; color: var(--muted); font-weight: 600; }
+    .flatpickr-calendar { z-index: 80 !important; }
+    .flatpickr-calendar.dark { background: #121a27; border: 1px solid rgba(231,238,252,0.14); box-shadow: 0 18px 50px rgba(0,0,0,0.5); }
     .small { color: var(--muted); font-size:12px; line-height:1.35; margin-top:10px; }
     .legend { display: none; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
     .legend.show { display: flex; }
@@ -88,12 +98,32 @@
         <div id="colorLegend" class="legend" aria-label="Color legend"></div>
       </div>
 
+      <div class="field">
+        <label>Time range</label>
+        <div class="time-range">
+          <div class="time-field">
+            <label for="timeFrom">From</label>
+            <input id="timeFrom" type="text" placeholder="Start date &amp; time" autocomplete="off" />
+          </div>
+          <div class="time-field">
+            <label for="timeTo">To</label>
+            <input id="timeTo" type="text" placeholder="End date &amp; time" autocomplete="off" />
+          </div>
+        </div>
+        <div class="row" style="margin-top:8px;">
+          <button type="button" id="timeFitBtn">Fit to data</button>
+          <button type="button" id="timeClearBtn">Clear time</button>
+        </div>
+        <div class="small" style="margin-top:0;">Calendar + time picker. Combined with the regex using AND. Empty bounds = no time limit.</div>
+      </div>
+
       <div class="note">
         <div style="font-weight:700; margin-bottom:6px;">Hardcoded parsing rules</div>
         <ul style="margin:0; padding-left: 18px;">
           <li><b>JSONL</b>: timestamp from <span class="mono">time</span>. Start when <span class="mono">event</span> indicates start. End when <span class="mono">event</span> indicates success/failure. Correlation id is <span class="mono">id</span>. Lane label & grouping is <span class="mono">query</span>.</li>
           <li><b>Text</b>: a new message starts only when the line begins with a timestamp (continuation lines, including Cypher line breaks, are joined). Start when the message contains <span class="mono">"Query started"</span>. End is the next non-start message. Correlation id extracted from <span class="mono">id:123</span>. Query derived as: take text after <span class="mono">"&gt;"</span>, split by <span class="mono">" - "</span>, take the 3rd element.</li>
           <li>If a file has <b>no start entries</b> (completed-only), start is inferred as end timestamp minus elapsed time (text: <span class="mono">- 2 ms:</span>; JSON: <span class="mono">elapsedTimeMs</span>).</li>
+          <li>Regex and time-range filters are combined with AND. An interval is kept if it overlaps the selected window.</li>
           <li>Bar color: default blue, failures red. With <span class="mono">(?&lt;color&gt;...)</span>, each distinct captured value fully sets the bar color. Other capture groups still form the lane label. Click a label to open the full log line.</li>
         </ul>
       </div>
@@ -290,10 +320,23 @@
     return truncate(parts.join(" ").replace(/\s+/g, " ").trim(), 80);
   }
 
-  function filterIntervals(list, re) {
-    if (!re) return list;
+  function intervalOverlapsTimeRange(iv, range) {
+    if (!range || (range.from == null && range.to == null)) return true;
+    const start = iv.start instanceof Date ? iv.start.getTime() : +iv.start;
+    const end = iv.end instanceof Date ? iv.end.getTime() : +iv.end;
+    if (range.from != null && end < range.from.getTime()) return false;
+    if (range.to != null && start > range.to.getTime()) return false;
+    return true;
+  }
+
+  function filterIntervals(list, re, timeRange) {
     const out = [];
     for (const iv of list) {
+      if (!intervalOverlapsTimeRange(iv, timeRange)) continue;
+      if (!re) {
+        out.push(iv);
+        continue;
+      }
       re.lastIndex = 0;
       const m = re.exec(iv.filterText || iv.endLine || "");
       if (!m) continue;
@@ -602,7 +645,7 @@
       Plotly.purge(container);
       renderColorLegend(null);
       const msg = allIntervals.length
-        ? "No log lines match the filter."
+        ? "No intervals match the current filters."
         : "No intervals parsed yet. Drop files on the left, then click Render.";
       container.innerHTML = "<div style='padding:16px; color: rgba(231,238,252,0.75)'>" + msg + "</div>";
       return;
@@ -682,6 +725,10 @@
   const renderBtn = document.getElementById("renderBtn");
   const clearBtn = document.getElementById("clearBtn");
   const cypherFilter = document.getElementById("cypherFilter");
+  const timeFromInput = document.getElementById("timeFrom");
+  const timeToInput = document.getElementById("timeTo");
+  const timeFitBtn = document.getElementById("timeFitBtn");
+  const timeClearBtn = document.getElementById("timeClearBtn");
   const linePopup = document.getElementById("linePopup");
   const linePopupCopy = document.getElementById("linePopupCopy");
   const linePopupClose = document.getElementById("linePopupClose");
@@ -690,6 +737,40 @@
   let loadedFiles = [];
   let allIntervals = [];
   let intervals = [];
+  let fpFrom = null;
+  let fpTo = null;
+
+  function dataTimeBounds(list) {
+    if (!list || !list.length) return null;
+    let min = list[0].start.getTime();
+    let max = list[0].end.getTime();
+    for (const iv of list) {
+      min = Math.min(min, iv.start.getTime(), iv.end.getTime());
+      max = Math.max(max, iv.start.getTime(), iv.end.getTime());
+    }
+    return { from: new Date(min), to: new Date(max) };
+  }
+
+  function getTimeRange() {
+    const from = fpFrom && fpFrom.selectedDates && fpFrom.selectedDates[0] ? fpFrom.selectedDates[0] : null;
+    const to = fpTo && fpTo.selectedDates && fpTo.selectedDates[0] ? fpTo.selectedDates[0] : null;
+    return { from, to };
+  }
+
+  function syncTimePickerLimits() {
+    const range = getTimeRange();
+    if (fpFrom) fpFrom.set("maxDate", range.to || null);
+    if (fpTo) fpTo.set("minDate", range.from || null);
+  }
+
+  function applyDataBoundsToPickers(list) {
+    const bounds = dataTimeBounds(list);
+    if (bounds) {
+      if (fpFrom) fpFrom.jumpToDate(bounds.from, false);
+      if (fpTo) fpTo.jumpToDate(bounds.to, false);
+    }
+    syncTimePickerLimits();
+  }
 
   async function loadFiles(fileList) {
     const files = Array.from(fileList || []);
@@ -708,8 +789,10 @@
       return;
     }
     if (remember) rememberFilter(cypherFilter.value);
-    intervals = filterIntervals(allIntervals, re);
-    intervalCount.textContent = re
+    const timeRange = getTimeRange();
+    intervals = filterIntervals(allIntervals, re, timeRange);
+    const timeActive = !!(timeRange.from || timeRange.to);
+    intervalCount.textContent = (re || timeActive)
       ? `${intervals.length} / ${allIntervals.length}`
       : String(allIntervals.length);
     renderPlot(intervals);
@@ -717,6 +800,7 @@
 
   function parseAndRender() {
     allIntervals = parseFiles(loadedFiles);
+    applyDataBoundsToPickers(allIntervals);
     applyFilterAndRender(true, true);
   }
 
@@ -758,7 +842,66 @@
     intervals = [];
     fileCount.textContent = "0";
     intervalCount.textContent = "0";
+    if (fpFrom) fpFrom.clear();
+    if (fpTo) fpTo.clear();
     renderPlot([]);
+  });
+
+  let timeSyncing = false;
+  function onTimeRangeChange() {
+    if (timeSyncing) return;
+    timeSyncing = true;
+    try {
+      syncTimePickerLimits();
+      applyFilterAndRender(false, false);
+    } finally {
+      timeSyncing = false;
+    }
+  }
+
+  function makeConfirmPlugin() {
+    if (typeof confirmDatePlugin !== "function") return [];
+    try {
+      return [confirmDatePlugin({ confirmText: "OK", showAlways: false })];
+    } catch {
+      try { return [new confirmDatePlugin({ confirmText: "OK", showAlways: false })]; }
+      catch { return []; }
+    }
+  }
+
+  const timePickerOpts = {
+    enableTime: true,
+    enableSeconds: true,
+    time_24hr: true,
+    dateFormat: "Y-m-d H:i:S",
+    allowInput: true,
+    weekNumbers: true,
+    monthSelectorType: "dropdown",
+    minuteIncrement: 1,
+    defaultHour: 0,
+    defaultMinute: 0,
+    appendTo: document.body,
+    plugins: makeConfirmPlugin(),
+    onChange: onTimeRangeChange,
+    onClose: onTimeRangeChange,
+  };
+
+  fpFrom = flatpickr(timeFromInput, Object.assign({}, timePickerOpts));
+  fpTo = flatpickr(timeToInput, Object.assign({}, timePickerOpts));
+
+  timeFitBtn.addEventListener("click", () => {
+    const bounds = dataTimeBounds(allIntervals);
+    if (!bounds) { toast("No intervals loaded"); return; }
+    fpFrom.setDate(bounds.from, false);
+    fpTo.setDate(bounds.to, false);
+    syncTimePickerLimits();
+    applyFilterAndRender(false, false);
+  });
+  timeClearBtn.addEventListener("click", () => {
+    fpFrom.clear();
+    fpTo.clear();
+    applyDataBoundsToPickers(allIntervals);
+    applyFilterAndRender(false, false);
   });
 
   chartEl.addEventListener("click", (e) => {
