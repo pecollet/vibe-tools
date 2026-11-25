@@ -68,7 +68,7 @@
 <body>
   <header>
     <h1>Query log swimlanes (Plotly)</h1>
-    <p class="sub">Drop one or more log files (JSONL or text). Hover a bar to see the raw start/end lines. Click a bar to copy the <span class="mono">query</span>. Click a lane label to view the full log line.</p>
+    <p class="sub">Drop one or more log files (JSONL or text). Hover a bar to see the raw start/end lines. Click a bar to copy the <span class="mono">query</span>. Click a lane label to view the full log line. Zoom the time axis to keep only lanes that overlap the window; double-click the plot to show them all again.</p>
   </header>
 
   <main>
@@ -114,7 +114,7 @@
           <button type="button" id="timeFitBtn">Fit to data</button>
           <button type="button" id="timeClearBtn">Clear time</button>
         </div>
-        <div class="small" style="margin-top:0;">Calendar + time picker. Combined with the regex using AND. Empty bounds = no time limit.</div>
+        <div class="small" style="margin-top:0;">Times are <b>UTC</b>, matching query log timestamps. Combined with the regex using AND. Empty bounds = no time limit.</div>
       </div>
 
       <div class="note">
@@ -124,6 +124,7 @@
           <li><b>Text</b>: a new message starts only when the line begins with a timestamp (continuation lines, including Cypher line breaks, are joined). Start when the message contains <span class="mono">"Query started"</span>. End is the next non-start message. Correlation id extracted from <span class="mono">id:123</span>. Query derived as: take text after <span class="mono">"&gt;"</span>, split by <span class="mono">" - "</span>, take the 3rd element.</li>
           <li>If a file has <b>no start entries</b> (completed-only), start is inferred as end timestamp minus elapsed time (text: <span class="mono">- 2 ms:</span>; JSON: <span class="mono">elapsedTimeMs</span>).</li>
           <li>Regex and time-range filters are combined with AND. An interval is kept if it overlaps the selected window.</li>
+          <li>Zooming the plot keeps that time window and drops lanes that do not overlap it. Double-click the plot, or use the modebar home button, to show every lane again.</li>
           <li>Bar color: default blue, failures red. With <span class="mono">(?&lt;color&gt;...)</span>, each distinct captured value fully sets the bar color. Other capture groups still form the lane label. Click a label to open the full log line.</li>
         </ul>
       </div>
@@ -160,18 +161,47 @@
 
   function parseTimeFromString(s) {
     const first = (s || "").split(/\r?\n/, 1)[0];
-    const t = Date.parse(first);
-    if (!Number.isNaN(t)) return new Date(t);
-    const m = first.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})([\.,](\d{1,6}))?/);
+    const m = first.match(
+      /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(?:[\.,](\d{1,9}))?(Z|[+-]\d{2}:?\d{2})?/
+    );
     if (m) {
-      const datePart = m[1];
-      const timePart = m[2];
-      const frac = m[4] ? m[4].padEnd(3, "0").slice(0, 3) : "000";
-      const iso = `${datePart}T${timePart}.${frac}Z`;
-      const t2 = Date.parse(iso);
-      if (!Number.isNaN(t2)) return new Date(t2);
+      const frac = m[3] ? m[3].padEnd(3, "0").slice(0, 3) : "000";
+      let off = m[4] || "Z";
+      if (off !== "Z") off = off.replace(/^([+-]\d{2})(\d{2})$/, "$1:$2");
+      const iso = `${m[1]}T${m[2]}.${frac}${off}`;
+      const t = Date.parse(iso);
+      if (!Number.isNaN(t)) return new Date(t);
     }
+    const t0 = Date.parse(first);
+    if (!Number.isNaN(t0)) return new Date(t0);
     return null;
+  }
+
+  function padTime(n, w) {
+    return String(n).padStart(w == null ? 2 : w, "0");
+  }
+
+  function formatUtcWallClock(d) {
+    if (!(d instanceof Date) || Number.isNaN(d.getTime())) return "";
+    return `${d.getUTCFullYear()}-${padTime(d.getUTCMonth() + 1)}-${padTime(d.getUTCDate())} ${padTime(d.getUTCHours())}:${padTime(d.getUTCMinutes())}:${padTime(d.getUTCSeconds())}.${padTime(d.getUTCMilliseconds(), 3)}`;
+  }
+
+  // Flatpickr uses local Date fields. Map those fields to/from UTC so the picker
+  // shows the same clock as query logs (+0000 / Z) and the chart.
+  function utcInstantToPickerDate(d) {
+    if (!d) return null;
+    return new Date(
+      d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(),
+      d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds(), d.getUTCMilliseconds()
+    );
+  }
+
+  function pickerDateToUtcInstant(d) {
+    if (!d) return null;
+    return new Date(Date.UTC(
+      d.getFullYear(), d.getMonth(), d.getDate(),
+      d.getHours(), d.getMinutes(), d.getSeconds(), d.getMilliseconds()
+    ));
   }
 
   function lineStartsWithTimestamp(line) {
@@ -466,8 +496,8 @@
   function intervalByYLabel(label) {
     const key = (label || "").replace(/\s+/g, " ").trim();
     if (!key) return null;
-    const idx = intervals.findIndex((iv, i) => yKeyFor(iv, i).replace(/\s+/g, " ").trim() === key);
-    return idx >= 0 ? intervals[idx] : null;
+    const idx = plottedIntervals.findIndex((iv, i) => yKeyFor(iv, i).replace(/\s+/g, " ").trim() === key);
+    return idx >= 0 ? plottedIntervals[idx] : null;
   }
 
   function intervalFromLabelClick(gd, e) {
@@ -637,30 +667,116 @@
     return intervals;
   }
 
-  function renderPlot(intervals) {
+  function sameIntervals(a, b) {
+    if (a === b) return true;
+    if (!a || !b || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+    return true;
+  }
+
+  // Plotly date axes are UTC. Range values come back as UTC wall-clock strings
+  // (or epoch ms) in the same clock as formatUtcWallClock.
+  function parseAxisTimeMs(v) {
+    if (typeof v === "number" && Number.isFinite(v)) return v;
+    const s = String(v == null ? "" : v).trim();
+    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:[.,](\d+))?/);
+    if (!m) {
+      const t = Date.parse(s);
+      return Number.isNaN(t) ? null : t;
+    }
+    const frac = (m[7] || "0").slice(0, 3).padEnd(3, "0");
+    return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6], +frac);
+  }
+
+  function axisRangeFromRelayout(ed) {
+    if (!ed) return null;
+    const r0 = ed["xaxis.range[0]"] != null
+      ? ed["xaxis.range[0]"]
+      : (Array.isArray(ed["xaxis.range"]) ? ed["xaxis.range"][0] : null);
+    const r1 = ed["xaxis.range[1]"] != null
+      ? ed["xaxis.range[1]"]
+      : (Array.isArray(ed["xaxis.range"]) ? ed["xaxis.range"][1] : null);
+    if (r0 == null || r1 == null) return null;
+    let from = parseAxisTimeMs(r0);
+    let to = parseAxisTimeMs(r1);
+    if (from == null || to == null) return null;
+    if (from > to) {
+      const swap = from;
+      from = to;
+      to = swap;
+      return { from, to, r0: r1, r1: r0 };
+    }
+    return { from, to, r0, r1 };
+  }
+
+  function intervalsOverlapping(list, fromMs, toMs) {
+    const range = { from: new Date(fromMs), to: new Date(toMs) };
+    return list.filter(iv => intervalOverlapsTimeRange(iv, range));
+  }
+
+  function onPlotRelayout(ed) {
+    // Resize emits {autosize:true} and sometimes a range that is not a user zoom.
+    // Treating that as a zoom drops every lane right after a file loads.
+    if (applyingZoom || !ed || ed.autosize) return;
+    const hasX = ed["xaxis.autorange"] != null
+      || ed["xaxis.range[0]"] != null
+      || Array.isArray(ed["xaxis.range"]);
+    if (!hasX) return;
+    const snapshot = ed;
+    clearTimeout(zoomTimer);
+    zoomTimer = setTimeout(() => applyZoomFromRelayout(snapshot), 0);
+  }
+
+  function applyZoomFromRelayout(ed) {
+    if (applyingZoom) return;
+    if (ed["xaxis.autorange"] === true) {
+      if (!plotXRange) return;
+      plotXRange = null;
+      renderPlot(intervals);
+      return;
+    }
+    const range = axisRangeFromRelayout(ed);
+    if (!range) return;
+    if (plotXRange
+        && Math.abs(range.from - plotXRange.from) < 5
+        && Math.abs(range.to - plotXRange.to) < 5) return;
+    const subset = intervalsOverlapping(intervals, range.from, range.to);
+    if (sameIntervals(subset, plottedIntervals)) return;
+    plotXRange = range;
+    renderPlot(subset, plotXRange);
+  }
+
+  function renderPlot(list, xLock) {
     const container = document.getElementById("chart");
+    clearTimeout(zoomTimer);
+    plottedIntervals = list || [];
+    try {
+      if (container.classList.contains("js-plotly-plot")) Plotly.purge(container);
+    } catch (e) { /* keep rendering even if the previous plot cannot be purged */ }
     container.innerHTML = ""; // fixes placeholder sticking under the plot
 
-    if (!intervals.length) {
-      Plotly.purge(container);
+    if (!plottedIntervals.length && !xLock) {
       renderColorLegend(null);
-      const msg = allIntervals.length
-        ? "No intervals match the current filters."
-        : "No intervals parsed yet. Drop files on the left, then click Render.";
-      container.innerHTML = "<div style='padding:16px; color: rgba(231,238,252,0.75)'>" + msg + "</div>";
+      const msg = !loadedFiles.length
+        ? "No intervals parsed yet. Drop files on the left, then click Render."
+        : (allIntervals.length
+          ? "No intervals match the current filters."
+          : "The file loaded, but no query intervals were found.");
+      showChartMessage(msg, false);
+      updateIntervalCount();
       return;
     }
 
-    const y = intervals.map((iv, i) => yKeyFor(iv, i));
-    const base = intervals.map(iv => iv.start.toISOString());
-    const x = intervals.map(iv => Math.max(0, iv.end - iv.start));
-    const colorMap = colorMapFor(intervals);
+    const y = plottedIntervals.map((iv, i) => yKeyFor(iv, i));
+    const base = plottedIntervals.map(iv => formatUtcWallClock(iv.start));
+    const x = plottedIntervals.map(iv => Math.max(0, iv.end - iv.start));
+    const colorMap = colorMapFor(plottedIntervals);
     renderColorLegend(colorMap);
 
-    const customdata = intervals.map((iv, i) => ({
+    const customdata = plottedIntervals.map((iv, i) => ({
       hover: iv.hover,
-      start: iv.start.toISOString(),
-      end: iv.end.toISOString(),
+      start: formatUtcWallClock(iv.start),
+      end: formatUtcWallClock(iv.end),
       durationMs: Math.max(0, iv.end - iv.start),
       sourceFile: iv.sourceFile,
       idx: i + 1,
@@ -671,7 +787,7 @@
       colorKey: iv.colorKey || "",
     }));
 
-    const colors = intervals.map(iv => {
+    const colors = plottedIntervals.map(iv => {
       if (colorMap && iv.colorKey != null) return colorMap.get(iv.colorKey) || COLOR_PALETTE[0];
       return iv.failed ? "#ff5a6a" : "#67a3ff";
     });
@@ -686,8 +802,8 @@
       customdata,
       hovertemplate:
         "<b>%{y}</b><br>" +
-        "Start: %{customdata.start}<br>" +
-        "End: %{customdata.end}<br>" +
+        "Start: %{customdata.start} UTC<br>" +
+        "End: %{customdata.end} UTC<br>" +
         "Duration: %{customdata.durationMs} ms<br>" +
         "File: %{customdata.sourceFile}<br>" +
         (colorMap ? "Color: %{customdata.colorKey}<br>" : "") +
@@ -698,24 +814,61 @@
       margin: { l: 200, r: 20, t: 20, b: 50 },
       paper_bgcolor: "rgba(0,0,0,0)",
       plot_bgcolor: "rgba(0,0,0,0)",
-      xaxis: { type: "date", title: "Time", gridcolor: "rgba(231,238,252,0.10)", zerolinecolor: "rgba(231,238,252,0.18)" },
-      yaxis: { title: "Queries (chronological)", gridcolor: "rgba(231,238,252,0.08)", automargin: true, autorange: "reversed", fixedrange: true },
+      xaxis: {
+        type: "date",
+        title: "Time (UTC)",
+        tickformat: "%Y-%m-%d %H:%M:%S",
+        gridcolor: "rgba(231,238,252,0.10)",
+        zerolinecolor: "rgba(231,238,252,0.18)",
+      },
+      yaxis: {
+        title: xLock ? "Queries in view" : "Queries (chronological)",
+        gridcolor: "rgba(231,238,252,0.08)",
+        automargin: true,
+        autorange: "reversed",
+        fixedrange: true,
+      },
       bargap: 0.25,
       hoverlabel: { bgcolor: "rgba(18,26,39,0.98)", bordercolor: "rgba(231,238,252,0.20)", font: { color: "#e7eefc" } },
       showlegend: false,
     };
 
+    if (xLock) {
+      layout.xaxis.range = [xLock.r0, xLock.r1];
+      layout.xaxis.autorange = false;
+    }
+
+    if (!plottedIntervals.length) {
+      layout.annotations = [{
+        text: "No queries overlap this window. Double-click to reset.",
+        xref: "paper",
+        yref: "paper",
+        x: 0.5,
+        y: 0.5,
+        showarrow: false,
+        font: { color: "#9fb0d0", size: 13 },
+      }];
+      layout.yaxis.showticklabels = false;
+    }
+
     const config = { responsive: true, displaylogo: false, toImageButtonOptions: { format: "png" } };
 
+    applyingZoom = true;
     Plotly.newPlot(container, [trace], layout, config).then(() => {
       container.on("plotly_click", async (evt) => {
         const pt = evt && evt.points && evt.points[0];
-        const q = pt && pt.customdata ? (pt.customdata.query || "") : "";
+        if (!pt || !pt.customdata) return;
+        const q = pt.customdata.query || "";
         if (!q) { toast("No query to copy"); return; }
         const ok = await copyToClipboard(q);
         toast(ok ? "Query copied" : "Copy failed");
       });
+      container.on("plotly_relayout", onPlotRelayout);
+      applyingZoom = false;
+    }, () => {
+      applyingZoom = false;
     });
+    updateIntervalCount();
   }
 
   const drop = document.getElementById("drop");
@@ -737,6 +890,10 @@
   let loadedFiles = [];
   let allIntervals = [];
   let intervals = [];
+  let plottedIntervals = [];
+  let plotXRange = null;
+  let applyingZoom = false;
+  let zoomTimer = null;
   let fpFrom = null;
   let fpTo = null;
 
@@ -751,34 +908,65 @@
     return { from: new Date(min), to: new Date(max) };
   }
 
-  function getTimeRange() {
+  function getPickerDates() {
     const from = fpFrom && fpFrom.selectedDates && fpFrom.selectedDates[0] ? fpFrom.selectedDates[0] : null;
     const to = fpTo && fpTo.selectedDates && fpTo.selectedDates[0] ? fpTo.selectedDates[0] : null;
     return { from, to };
   }
 
+  function getTimeRange() {
+    const p = getPickerDates();
+    return { from: pickerDateToUtcInstant(p.from), to: pickerDateToUtcInstant(p.to) };
+  }
+
   function syncTimePickerLimits() {
-    const range = getTimeRange();
-    if (fpFrom) fpFrom.set("maxDate", range.to || null);
-    if (fpTo) fpTo.set("minDate", range.from || null);
+    const p = getPickerDates();
+    if (fpFrom) fpFrom.set("maxDate", p.to || null);
+    if (fpTo) fpTo.set("minDate", p.from || null);
   }
 
   function applyDataBoundsToPickers(list) {
     const bounds = dataTimeBounds(list);
     if (bounds) {
-      if (fpFrom) fpFrom.jumpToDate(bounds.from, false);
-      if (fpTo) fpTo.jumpToDate(bounds.to, false);
+      if (fpFrom) fpFrom.jumpToDate(utcInstantToPickerDate(bounds.from), false);
+      if (fpTo) fpTo.jumpToDate(utcInstantToPickerDate(bounds.to), false);
     }
     syncTimePickerLimits();
+  }
+
+  function showChartMessage(msg, isError) {
+    const container = document.getElementById("chart");
+    try {
+      if (window.Plotly && container.classList.contains("js-plotly-plot")) Plotly.purge(container);
+    } catch (e) { /* a failed purge must not hide the message */ }
+    container.innerHTML = "";
+    const note = document.createElement("div");
+    note.style.padding = "16px";
+    note.style.color = isError ? "rgba(255,90,106,0.95)" : "rgba(231,238,252,0.75)";
+    note.textContent = msg;
+    container.appendChild(note);
   }
 
   async function loadFiles(fileList) {
     const files = Array.from(fileList || []);
     for (const f of files) {
       const text = await f.text();
-      loadedFiles.push(Object.assign(f, { __text: text }));
+      // Keep a plain record. File objects from the picker are not always extensible,
+      // and Object.assign(file, {__text}) then throws before anything is parsed.
+      loadedFiles.push({ name: f.name || "log", __text: text });
     }
     fileCount.textContent = String(loadedFiles.length);
+  }
+
+  async function ingestFiles(fileList) {
+    try {
+      await loadFiles(fileList);
+      parseAndRender();
+    } catch (err) {
+      const msg = err && err.message ? err.message : "Could not read that file.";
+      toast(msg);
+      showChartMessage(msg, true);
+    }
   }
 
   function applyFilterAndRender(showInvalidToast, remember) {
@@ -790,12 +978,22 @@
     }
     if (remember) rememberFilter(cypherFilter.value);
     const timeRange = getTimeRange();
+    plotXRange = null;
     intervals = filterIntervals(allIntervals, re, timeRange);
-    const timeActive = !!(timeRange.from || timeRange.to);
-    intervalCount.textContent = (re || timeActive)
-      ? `${intervals.length} / ${allIntervals.length}`
-      : String(allIntervals.length);
     renderPlot(intervals);
+  }
+
+  function updateIntervalCount() {
+    const timeRange = getTimeRange();
+    const timeActive = !!(timeRange.from || timeRange.to);
+    const compiled = compileQueryFilter(cypherFilter.value);
+    const re = compiled.error ? null : compiled.re;
+    const filteredNote = (re || timeActive)
+      ? `${intervals.length} / ${allIntervals.length}`
+      : String(intervals.length);
+    intervalCount.textContent = plotXRange
+      ? `${plottedIntervals.length} in view (${filteredNote})`
+      : filteredNote;
   }
 
   function parseAndRender() {
@@ -808,9 +1006,9 @@
   drop.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") fileInput.click(); });
 
   fileInput.addEventListener("change", async (e) => {
-    await loadFiles(e.target.files);
-    parseAndRender();
+    const chosen = Array.from(e.target.files || []);
     fileInput.value = "";
+    if (chosen.length) await ingestFiles(chosen);
   });
 
   drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("dragover"); });
@@ -819,8 +1017,7 @@
     e.preventDefault();
     drop.classList.remove("dragover");
     if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) {
-      await loadFiles(e.dataTransfer.files);
-      parseAndRender();
+      await ingestFiles(e.dataTransfer.files);
     }
   });
 
@@ -840,6 +1037,7 @@
     loadedFiles = [];
     allIntervals = [];
     intervals = [];
+    plotXRange = null;
     fileCount.textContent = "0";
     intervalCount.textContent = "0";
     if (fpFrom) fpFrom.clear();
@@ -892,8 +1090,8 @@
   timeFitBtn.addEventListener("click", () => {
     const bounds = dataTimeBounds(allIntervals);
     if (!bounds) { toast("No intervals loaded"); return; }
-    fpFrom.setDate(bounds.from, false);
-    fpTo.setDate(bounds.to, false);
+    fpFrom.setDate(utcInstantToPickerDate(bounds.from), false);
+    fpTo.setDate(utcInstantToPickerDate(bounds.to), false);
     syncTimePickerLimits();
     applyFilterAndRender(false, false);
   });
@@ -921,9 +1119,9 @@
     if (e.key === "Escape" && linePopup.classList.contains("show")) hideLogPopup();
   });
 
-  const savedFilters = loadFilterHistory();
-  renderFilterHistory(savedFilters);
-  if (savedFilters[0]) cypherFilter.value = savedFilters[0];
+  // History is offered from the dropdown. Do not prefill the box: a leftover
+  // regex would hide every interval and look like the file failed to load.
+  renderFilterHistory(loadFilterHistory());
 
   renderPlot([]);
 </script>
