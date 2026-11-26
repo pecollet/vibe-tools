@@ -9,6 +9,8 @@
     "test:functional": "node --test \"doppelgrapher/functional/*.test.js\""
   },
   "dependencies": {
+    "hyparquet": "^1.32.0",
+    "hyparquet-compressors": "^1.1.2",
     "jsdom": "^25.0.1",
     "jszip": "^3.10.1",
     "neo4j-driver": "^6.2.0",

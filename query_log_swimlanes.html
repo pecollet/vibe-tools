@@ -68,7 +68,7 @@
 <body>
   <header>
     <h1>Query log swimlanes (Plotly)</h1>
-    <p class="sub">Drop one or more log files (JSONL or text). Hover a bar to see the raw start/end lines. Click a bar to copy the <span class="mono">query</span>. Click a lane label to view the full log line. Zoom the time axis to keep only lanes that overlap the window; double-click the plot to show them all again.</p>
+    <p class="sub">Drop one or more log files (JSONL, text, or Parquet, including <span class="mono">.parquet.gzip</span>). Hover a bar to see the raw start/end lines. Click a bar to copy the <span class="mono">query</span>. Click a lane label to view the full log line. Zoom the time axis to keep only lanes that overlap the window; double-click the plot to show them all again.</p>
   </header>
 
   <main>
@@ -89,6 +89,7 @@
         <button id="clearBtn" class="danger">Clear</button>
         <span class="pill">Intervals: <b id="intervalCount">0</b></span>
       </div>
+      <div id="loadStatus" class="small" style="margin-top:8px;"></div>
 
       <div class="field">
         <label for="cypherFilter">Log filter (regex)</label>
@@ -123,6 +124,7 @@
           <li><b>JSONL</b>: timestamp from <span class="mono">time</span>. Start when <span class="mono">event</span> indicates start. End when <span class="mono">event</span> indicates success/failure. Correlation id is <span class="mono">id</span>. Lane label & grouping is <span class="mono">query</span>.</li>
           <li><b>Text</b>: a new message starts only when the line begins with a timestamp (continuation lines, including Cypher line breaks, are joined). Start when the message contains <span class="mono">"Query started"</span>. End is the next non-start message. Correlation id extracted from <span class="mono">id:123</span>. Query derived as: take text after <span class="mono">"&gt;"</span>, split by <span class="mono">" - "</span>, take the 3rd element.</li>
           <li>If a file has <b>no start entries</b> (completed-only), start is inferred as end timestamp minus elapsed time (text: <span class="mono">- 2 ms:</span>; JSON: <span class="mono">elapsedTimeMs</span>).</li>
+          <li><b>Parquet</b> (including gzip-compressed columns and <span class="mono">.parquet.gzip</span>): one row is one finished query. <span class="mono">time</span> is the end timestamp. Duration is <span class="mono">queryMillis</span> or <span class="mono">elapsedTimeMs</span>, in milliseconds. A non-empty <span class="mono">error</span> marks a failure. Large files are read by page and evenly sampled (a few thousand queries) so the whole column is never loaded into memory. Zooming or panning re-reads the file for that time window, again capped at the same sample size; when the window holds fewer queries than that, every one is shown.</li>
           <li>Regex and time-range filters are combined with AND. An interval is kept if it overlaps the selected window.</li>
           <li>Zooming the plot keeps that time window and drops lanes that do not overlap it. Double-click the plot, or use the modebar home button, to show every lane again.</li>
           <li>Bar color: default blue, failures red. With <span class="mono">(?&lt;color&gt;...)</span>, each distinct captured value fully sets the bar color. Other capture groups still form the lane label. Click a label to open the full log line.</li>
@@ -524,6 +526,742 @@
     }
   }
 
+  const PARQUET_MAX_BARS = 4000;
+  const PARQUET_PAGE_CAP = 8 * 1024 * 1024;
+  const PARQUET_DICT_CAP = 16 * 1024 * 1024;
+  const PARQUET_QUERY_CAP = 32000;
+  const PARQUET_GZIP_WRAP_LIMIT = 80 * 1024 * 1024;
+  const PARQUET_WINDOW_PAGE_BUDGET = 600;
+
+  function parquetMaxBars() {
+    const n = window.__parquetMaxBars;
+    return typeof n === "number" && n > 0 ? Math.floor(n) : PARQUET_MAX_BARS;
+  }
+
+  function yieldNow() {
+    return new Promise(resolve => setTimeout(resolve, 0));
+  }
+
+  function isParquetFileName(name) {
+    return /\.(parquet|pq)(\.(gz|gzip))?$/i.test(String(name || ""));
+  }
+
+  function looksLikeParquetMagic(bytes) {
+    return bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x41 && bytes[2] === 0x52 && bytes[3] === 0x31;
+  }
+
+  function looksLikeGzipMagic(bytes) {
+    return bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b;
+  }
+
+  function asNumber(value) {
+    if (typeof value === "bigint") return Number(value);
+    if (typeof value === "number") return Number.isFinite(value) ? value : null;
+    if (typeof value === "boolean") return value ? 1 : 0;
+    if (value == null || value === "") return null;
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  function asDate(value) {
+    // Date objects from a dynamically imported parser are not always `instanceof Date`.
+    if (value && Object.prototype.toString.call(value) === "[object Date]") {
+      const time = value.getTime();
+      return Number.isNaN(time) ? null : new Date(time);
+    }
+    if (typeof value === "bigint") return new Date(Number(value));
+    if (typeof value === "number" && Number.isFinite(value)) return new Date(value);
+    if (typeof value === "string") return parseTimeFromString(value);
+    return null;
+  }
+
+  function isErrorValue(value) {
+    if (value == null || value === false || value === 0) return false;
+    if (value === true) return true;
+    const s = String(value).trim();
+    if (!s) return false;
+    const lower = s.toLowerCase();
+    return lower !== "null" && lower !== "none" && lower !== "false" && lower !== "0";
+  }
+
+  function setLoadStatus(text) {
+    const el = document.getElementById("loadStatus");
+    if (el) el.textContent = text || "";
+  }
+
+  function refreshSampleStatus() {
+    const bits = [];
+    for (const file of loadedFiles) {
+      if (file.__sourceRows && file.__intervals && file.__intervals.length < file.__sourceRows) {
+        bits.push(`${file.name}: ${file.__intervals.length.toLocaleString("en-US")} of ${file.__sourceRows.toLocaleString("en-US")} sampled`);
+      }
+    }
+    setLoadStatus(bits.length
+      ? bits.join(" · ") + ". Evenly sampled so a large Parquet file stays in the browser."
+      : "");
+  }
+
+  let parquetLibsPromise = null;
+  function loadParquetLibs() {
+    if (window.__parquetLibs) return Promise.resolve(window.__parquetLibs);
+    if (!parquetLibsPromise) {
+      parquetLibsPromise = Promise.all([
+        import("https://cdn.jsdelivr.net/npm/hyparquet@1.32.0/src/index.js"),
+        import("https://cdn.jsdelivr.net/npm/hyparquet@1.32.0/src/column.js"),
+        import("https://cdn.jsdelivr.net/npm/hyparquet@1.32.0/src/schema.js"),
+        import("https://cdn.jsdelivr.net/npm/hyparquet@1.32.0/src/convert.js"),
+        import("https://cdn.jsdelivr.net/npm/hyparquet-compressors@1.1.2/+esm"),
+      ]).then(([hy, column, schema, convert, comp]) => ({
+        parquetMetadataAsync: hy.parquetMetadataAsync,
+        parquetSchema: hy.parquetSchema,
+        parquetHeader: column.parquetHeader,
+        readPage: column.readPage,
+        getTreePath: schema.getTreePath,
+        convert: convert.convert,
+        DEFAULT_PARSERS: convert.DEFAULT_PARSERS,
+        compressors: comp.compressors,
+      })).catch(err => {
+        parquetLibsPromise = null;
+        throw new Error("Could not load the Parquet reader. " + (err && err.message ? err.message : ""));
+      });
+    }
+    return parquetLibsPromise;
+  }
+
+  function readBlob(blob) {
+    if (blob && typeof blob.arrayBuffer === "function") return blob.arrayBuffer();
+    return new Promise((resolve, reject) => {
+      if (typeof FileReader !== "function") {
+        reject(new Error("Could not read file bytes"));
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(reader.error || new Error("Could not read file bytes"));
+      reader.readAsArrayBuffer(blob);
+    });
+  }
+
+  function asyncBufferFromBlob(blob) {
+    return {
+      byteLength: blob.size,
+      slice(start, end) {
+        return readBlob(blob.slice(start, end));
+      },
+    };
+  }
+
+  async function readHeaderAt(blob, pos, chunkEnd, parquetHeader) {
+    let size = 1024;
+    const max = Math.min(256 * 1024, chunkEnd - pos);
+    let lastError = null;
+    while (size <= max || size === 1024) {
+      const n = Math.min(size, chunkEnd - pos);
+      const buf = await readBlob(blob.slice(pos, pos + n));
+      const reader = { view: new DataView(buf), offset: 0 };
+      try {
+        const header = parquetHeader(reader);
+        const compressed = Number(header.compressed_page_size);
+        if (!Number.isFinite(compressed) || compressed < 0) throw new Error("bad page size");
+        if (reader.offset < buf.byteLength || n === chunkEnd - pos) {
+          header.compressed_page_size = compressed;
+          header.uncompressed_page_size = Number(header.uncompressed_page_size);
+          if (header.data_page_header) header.data_page_header.num_values = Number(header.data_page_header.num_values);
+          if (header.dictionary_page_header) header.dictionary_page_header.num_values = Number(header.dictionary_page_header.num_values);
+          if (header.data_page_header_v2) {
+            header.data_page_header_v2.num_values = Number(header.data_page_header_v2.num_values);
+            header.data_page_header_v2.num_rows = Number(header.data_page_header_v2.num_rows);
+          }
+          return { header, bytesRead: reader.offset };
+        }
+      } catch (err) {
+        lastError = err;
+        if (n >= max) break;
+      }
+      if (n >= max) break;
+      size *= 2;
+    }
+    throw lastError || new Error("Could not read a Parquet page header");
+  }
+
+  async function indexColumnChunk(blob, meta, libs, alive) {
+    const dictOff = Number(meta.dictionary_page_offset || 0);
+    const dataOff = Number(meta.data_page_offset);
+    const start = dictOff > 0 ? dictOff : dataOff;
+    const end = start + Number(meta.total_compressed_size);
+    const pages = [];
+    let pos = start;
+    let rows = 0;
+    while (pos < end) {
+      if (!alive()) return null;
+      const { header, bytesRead } = await readHeaderAt(blob, pos, end, libs.parquetHeader);
+      const dataOffset = pos + bytesRead;
+      const isDict = header.type === "DICTIONARY_PAGE";
+      const numValues = isDict
+        ? 0
+        : Number(header.data_page_header?.num_values ?? header.data_page_header_v2?.num_rows ?? 0);
+      pages.push({
+        type: header.type,
+        header,
+        dataOffset,
+        compressedSize: header.compressed_page_size,
+        uncompressedSize: header.uncompressed_page_size,
+        rowStart: rows,
+        numValues,
+        encoding: header.data_page_header?.encoding
+          || header.data_page_header_v2?.encoding
+          || header.dictionary_page_header?.encoding
+          || "",
+      });
+      if (!isDict) rows += numValues;
+      const next = dataOffset + header.compressed_page_size;
+      if (next <= pos) throw new Error("Parquet page did not advance");
+      pos = next;
+    }
+    return pages;
+  }
+
+  function dataPagesOf(pages) {
+    const out = [];
+    for (const page of pages) {
+      if (page.type === "DATA_PAGE" || page.type === "DATA_PAGE_V2") out.push(page);
+    }
+    return out;
+  }
+
+  function pickIndexes(n, k) {
+    if (k >= n) {
+      const all = new Array(n);
+      for (let i = 0; i < n; i++) all[i] = i;
+      return all;
+    }
+    const out = new Array(k);
+    for (let i = 0; i < k; i++) {
+      let idx = Math.floor((i + 0.5) * n / k);
+      if (idx >= n) idx = n - 1;
+      out[i] = idx;
+    }
+    return out;
+  }
+
+  function chooseRowIndexes(pages, bars) {
+    const usable = pages.filter(page => page.numValues > 0 && page.uncompressedSize <= PARQUET_PAGE_CAP);
+    if (!usable.length || bars <= 0) return [];
+    let available = 0;
+    for (const page of usable) available += page.numValues;
+    const want = Math.min(bars, available);
+    const pageCount = Math.min(usable.length, Math.max(1, Math.ceil(want / 24)));
+    const chosen = pickIndexes(usable.length, pageCount).map(i => usable[i]);
+    const indexes = [];
+    const perPage = Math.max(1, Math.ceil(want / chosen.length));
+    for (const page of chosen) {
+      const take = Math.min(perPage, page.numValues, want - indexes.length);
+      if (take <= 0) break;
+      for (const local of pickIndexes(page.numValues, take)) indexes.push(page.rowStart + local);
+    }
+    return indexes;
+  }
+
+  function findDataPage(pages, row) {
+    let low = 0;
+    let high = pages.length - 1;
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      const page = pages[mid];
+      if (row < page.rowStart) high = mid - 1;
+      else if (row >= page.rowStart + page.numValues) low = mid + 1;
+      else return page;
+    }
+    return null;
+  }
+
+  function columnDecoderFor(schemaTree, name, meta, libs) {
+    const schemaPath = libs.getTreePath(schemaTree, meta.path_in_schema || [name]);
+    return {
+      pathInSchema: meta.path_in_schema || [name],
+      element: schemaPath[schemaPath.length - 1].element,
+      schemaPath,
+      type: meta.type,
+      codec: meta.codec,
+      compressors: libs.compressors,
+      parsers: libs.DEFAULT_PARSERS,
+      utf8: true,
+    };
+  }
+
+  async function decodePageBytes(blob, page, decoder, dictionary, readPage) {
+    const buf = await readBlob(blob.slice(page.dataOffset, page.dataOffset + page.compressedSize));
+    const bytes = new Uint8Array(buf);
+    const reader = { view: new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength), offset: 0 };
+    const result = readPage(reader, page.header, decoder, dictionary, undefined, 0);
+    return result && result.data ? result.data : [];
+  }
+
+  async function dictionaryFor(src, key, pages, decoder) {
+    if (src.dictCache.has(key)) return src.dictCache.get(key);
+    const dictPage = pages.find(page => page.type === "DICTIONARY_PAGE");
+    let dictionary;
+    if (dictPage && dictPage.uncompressedSize <= PARQUET_DICT_CAP) {
+      const raw = await decodePageBytes(src.blob, dictPage, decoder, undefined, src.libs.readPage);
+      dictionary = src.libs.convert(raw, decoder);
+    }
+    // Only the last few dictionaries are kept: each can hold megabytes of query text.
+    src.dictCache.set(key, dictionary);
+    if (src.dictCache.size > 12) src.dictCache.delete(src.dictCache.keys().next().value);
+    return dictionary;
+  }
+
+  async function decodeDataPage(src, key, pages, page, decoder) {
+    let dictionary;
+    if (String(page.encoding).includes("DICTIONARY")) {
+      dictionary = await dictionaryFor(src, key, pages, decoder);
+      if (!dictionary) return null;
+    }
+    return decodePageBytes(src.blob, page, decoder, dictionary, src.libs.readPage);
+  }
+
+  async function valuesForRows(src, key, pages, rowIndexes, decoder, alive) {
+    const dataPages = dataPagesOf(pages);
+    const byPage = new Map();
+    for (const row of rowIndexes) {
+      if (!alive()) return null;
+      const page = findDataPage(dataPages, row);
+      if (!page || page.uncompressedSize > PARQUET_PAGE_CAP) continue;
+      let locals = byPage.get(page);
+      if (!locals) { locals = []; byPage.set(page, locals); }
+      locals.push(row - page.rowStart);
+    }
+    const values = new Map();
+    for (const [page, locals] of byPage) {
+      if (!alive()) return null;
+      const data = await decodeDataPage(src, key, pages, page, decoder);
+      if (!data) continue;
+      for (const local of locals) {
+        if (local >= 0 && local < data.length) values.set(page.rowStart + local, data[local]);
+      }
+    }
+    return values;
+  }
+
+  function findSchemaName(names, candidates) {
+    const byLower = new Map(names.map(name => [name.toLowerCase(), name]));
+    for (const candidate of candidates) {
+      const hit = byLower.get(candidate);
+      if (hit) return hit;
+    }
+    return null;
+  }
+
+  function metaFor(group, name) {
+    for (const column of group.columns || []) {
+      const meta = column.meta_data;
+      const path = meta && meta.path_in_schema;
+      if (path && path.length === 1 && path[0] === name) return meta;
+    }
+    return null;
+  }
+
+  function planRowGroups(groups, total, maxBars) {
+    const rows = groups.map(group => Number(group.num_rows));
+    if (groups.length > maxBars && total > maxBars) {
+      return pickIndexes(groups.length, maxBars).map(index => ({
+        g: index,
+        bars: 1,
+        rows: rows[index],
+      }));
+    }
+    let remainingBars = maxBars;
+    let remainingRows = total;
+    const plan = [];
+    for (let i = 0; i < groups.length; i++) {
+      const groupRows = rows[i];
+      const bars = total <= maxBars
+        ? groupRows
+        : Math.max(1, Math.min(groupRows, Math.round(remainingBars * groupRows / Math.max(remainingRows, 1))));
+      plan.push({ g: i, bars, rows: groupRows });
+      remainingBars -= bars;
+      remainingRows -= groupRows;
+    }
+    return plan;
+  }
+
+  function parquetLogLine(end, fields, query) {
+    const bits = [formatUtcWallClock(end) + "Z"];
+    for (const [key, value] of fields) {
+      if (value == null || value === "") continue;
+      let text = value instanceof Date ? formatUtcWallClock(value) : String(value);
+      if (text.length > 180) text = text.slice(0, 180);
+      bits.push(key + ": " + text);
+    }
+    return bits.join(" ") + (query ? "\n" + query : "");
+  }
+
+  async function inflateGzipBlob(file) {
+    const size = file.size || 0;
+    if (size > PARQUET_GZIP_WRAP_LIMIT) {
+      throw new Error("This gzip wrapper is too large to unpack in the browser. A .parquet.gzip file written as Parquet (gzip inside the columns) can be dropped directly.");
+    }
+    if (typeof DecompressionStream !== "function" || typeof file.stream !== "function") {
+      throw new Error("This browser cannot unpack a gzip wrapper. Drop the Parquet file itself; gzip-compressed columns, including .parquet.gzip, are supported.");
+    }
+    const stream = file.stream().pipeThrough(new DecompressionStream("gzip"));
+    const buf = await new Response(stream).arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    if (!looksLikeParquetMagic(bytes.subarray(0, 4))) throw new Error("Gzip contents are not a Parquet file.");
+    return {
+      size: bytes.byteLength,
+      slice(start, end) {
+        const s = Math.max(0, start || 0);
+        const e = end == null ? bytes.byteLength : Math.min(bytes.byteLength, end);
+        const copy = new Uint8Array(Math.max(0, e - s));
+        copy.set(bytes.subarray(s, e));
+        return { arrayBuffer: () => Promise.resolve(copy.buffer) };
+      },
+    };
+  }
+
+  async function openParquetSource(blob, name) {
+    const libs = await loadParquetLibs();
+    const metadata = await libs.parquetMetadataAsync(asyncBufferFromBlob(blob));
+    const schemaTree = libs.parquetSchema(metadata);
+    const names = metadata.schema.filter(element => element && element.type && element.name).map(element => element.name);
+    const endName = findSchemaName(names, ["endtime", "end", "time", "timestamp", "eventtime", "logtime", "datetime"]);
+    let startName = findSchemaName(names, ["starttime", "start", "querystart"]);
+    if (startName === endName) startName = null;
+    const durationName = findSchemaName(names, ["querymillis", "elapsedtimems", "elapsed_ms", "duration_ms", "durationms", "elapsedmillis", "duration", "elapsed"]);
+    const queryName = findSchemaName(names, ["query", "cypher", "querytext", "statement"]);
+    const errorName = findSchemaName(names, ["error", "failure", "errormessage", "exception"]);
+    if (!endName && !startName) throw new Error("Parquet file has no time column (expected time, timestamp, or endTime).");
+    if (!queryName) throw new Error("Parquet file has no query column.");
+
+    const anchorName = queryName;
+    const context = [];
+    const firstGroup = metadata.row_groups[0];
+    for (const columnName of names) {
+      if (columnName === queryName || columnName === endName || columnName === startName || columnName === durationName) continue;
+      const meta = firstGroup && metaFor(firstGroup, columnName);
+      const values = meta ? Number(meta.num_values) || 1 : 1;
+      const avg = meta ? Number(meta.total_uncompressed_size) / values : 0;
+      if (avg > 1024) continue;
+      context.push(columnName);
+      if (context.length >= 24) break;
+    }
+    const readNames = [];
+    for (const columnName of [endName, startName, durationName, queryName, errorName, ...context]) {
+      if (columnName && !readNames.includes(columnName)) readNames.push(columnName);
+    }
+
+    return {
+      blob,
+      name,
+      libs,
+      metadata,
+      schemaTree,
+      total: Number(metadata.num_rows),
+      timeName: endName || startName,
+      timeIsEnd: !!endName,
+      endName,
+      startName,
+      durationName,
+      queryName,
+      errorName,
+      anchorName,
+      context,
+      readNames,
+      pageCache: new Map(),
+      dictCache: new Map(),
+    };
+  }
+
+  async function pagesFor(src, g, columnName, alive) {
+    const key = g + ":" + columnName;
+    if (src.pageCache.has(key)) return src.pageCache.get(key);
+    const meta = metaFor(src.metadata.row_groups[g], columnName);
+    if (!meta) return null;
+    const pages = await indexColumnChunk(src.blob, meta, src.libs, alive);
+    if (pages) src.pageCache.set(key, pages);
+    return pages;
+  }
+
+  async function intervalsForRows(src, g, rowIndexes, alive) {
+    const group = src.metadata.row_groups[g];
+    const { endName, startName, durationName, queryName, errorName, context, name } = src;
+    const series = new Map();
+    for (const columnName of src.readNames) {
+      if (!alive()) return null;
+      const meta = metaFor(group, columnName);
+      if (!meta) continue;
+      const pages = await pagesFor(src, g, columnName, alive);
+      if (!pages) return null;
+      const decoder = columnDecoderFor(src.schemaTree, columnName, meta, src.libs);
+      const values = await valuesForRows(src, g + ":" + columnName, pages, rowIndexes, decoder, alive);
+      if (!values) return null;
+      series.set(columnName, values);
+    }
+    const intervals = [];
+    for (const row of rowIndexes) {
+      const endValue = endName ? series.get(endName)?.get(row) : null;
+      const startValue = startName ? series.get(startName)?.get(row) : null;
+      let end = asDate(endValue);
+      let start = asDate(startValue);
+      const duration = durationName ? asNumber(series.get(durationName)?.get(row)) : null;
+      const elapsed = duration == null ? 0 : Math.max(0, duration);
+      if (!end && start) end = new Date(start.getTime() + elapsed);
+      if (!start && end) start = new Date(end.getTime() - elapsed);
+      if (!start || !end) continue;
+      let query = series.get(queryName)?.get(row);
+      query = query == null ? "" : String(query);
+      if (query.length > PARQUET_QUERY_CAP) query = query.slice(0, PARQUET_QUERY_CAP) + "\n… (truncated)";
+      const fields = [];
+      if (durationName && duration != null) fields.push([durationName, duration]);
+      for (const columnName of context) {
+        if (!series.has(columnName)) continue;
+        fields.push([columnName, series.get(columnName).get(row)]);
+      }
+      const line = parquetLogLine(end, fields, query);
+      const failed = errorName ? isErrorValue(series.get(errorName)?.get(row)) : false;
+      intervals.push(makeInterval({
+        query,
+        start,
+        end,
+        failed,
+        sourceFile: name,
+        endLine: line,
+        inferredElapsedMs: elapsed,
+      }));
+    }
+    return intervals;
+  }
+
+  async function sampleWholeFile(src, alive) {
+    const { total } = src;
+    const maxBars = parquetMaxBars();
+    const plan = planRowGroups(src.metadata.row_groups, total, maxBars);
+    const intervals = [];
+    for (let p = 0; p < plan.length; p++) {
+      if (!alive()) return null;
+      if (total > maxBars && intervals.length >= maxBars) break;
+      const { g, bars } = plan[p];
+      if (plan.length > 1) {
+        const msg = `Reading ${src.name}: row group ${p + 1} of ${plan.length} (${intervals.length.toLocaleString("en-US")} queries)`;
+        setLoadStatus(msg);
+        showChartMessage(msg, false);
+        await yieldNow();
+      }
+      const anchorPages = await pagesFor(src, g, src.anchorName, alive);
+      if (!anchorPages) {
+        if (!alive()) return null;
+        continue;
+      }
+      let rowIndexes = chooseRowIndexes(dataPagesOf(anchorPages), bars);
+      if (total > maxBars) {
+        const room = maxBars - intervals.length;
+        if (rowIndexes.length > room) rowIndexes = rowIndexes.slice(0, room);
+      }
+      if (!rowIndexes.length) continue;
+      const part = await intervalsForRows(src, g, rowIndexes, alive);
+      if (!part) return null;
+      for (const iv of part) intervals.push(iv);
+    }
+    return intervals;
+  }
+
+  function groupTimeBounds(src, g) {
+    const meta = metaFor(src.metadata.row_groups[g], src.timeName);
+    const stats = meta && meta.statistics;
+    if (!stats) return null;
+    const min = asDate(stats.min_value ?? stats.min);
+    const max = asDate(stats.max_value ?? stats.max);
+    return min && max ? { min: min.getTime(), max: max.getTime() } : null;
+  }
+
+  // Resample only the rows whose timestamp falls in [fromMs, toMs]. Row-group
+  // statistics skip groups outside the window; the time column is then decoded
+  // page by page (within a page budget) to find matching rows.
+  async function sampleWindow(src, fromMs, toMs, alive) {
+    const maxBars = parquetMaxBars();
+    // A query that ends after the window can still overlap it, so widen the side
+    // of the window the stored timestamp is on by the longest recorded duration.
+    const slack = maxDurationMs(src);
+    const lo = src.timeIsEnd ? fromMs : fromMs - slack;
+    const hi = src.timeIsEnd ? toMs + slack : toMs;
+
+    const groups = [];
+    for (let g = 0; g < src.metadata.row_groups.length; g++) {
+      const bounds = groupTimeBounds(src, g);
+      if (!bounds || (bounds.max >= lo && bounds.min <= hi)) groups.push(g);
+    }
+    if (!groups.length) return { intervals: [], inWindow: 0, exact: true };
+
+    const timePages = [];
+    let totalPages = 0;
+    for (const g of groups) {
+      if (!alive()) return null;
+      const pages = await pagesFor(src, g, src.timeName, alive);
+      if (!pages) {
+        if (!alive()) return null;
+        continue;
+      }
+      const data = dataPagesOf(pages).filter(page => page.uncompressedSize <= PARQUET_PAGE_CAP);
+      timePages.push({ g, pages, data });
+      totalPages += data.length;
+    }
+
+    const budget = PARQUET_WINDOW_PAGE_BUDGET;
+    const sampled = totalPages > budget;
+    const meta0 = metaFor(src.metadata.row_groups[groups[0]], src.timeName);
+    const timeDecoder = columnDecoderFor(src.schemaTree, src.timeName, meta0, src.libs);
+    const candidates = [];
+    let decodedPages = 0;
+    for (const { g, pages, data } of timePages) {
+      const quota = sampled ? Math.max(1, Math.round(budget * data.length / totalPages)) : data.length;
+      for (const index of pickIndexes(data.length, Math.min(quota, data.length))) {
+        if (!alive()) return null;
+        const page = data[index];
+        const values = await decodeDataPage(src, g + ":" + src.timeName, pages, page, timeDecoder);
+        if (!values) continue;
+        decodedPages++;
+        for (let i = 0; i < values.length; i++) {
+          const t = asDate(values[i]);
+          if (!t) continue;
+          const ms = t.getTime();
+          if (ms >= lo && ms <= hi) candidates.push({ g, row: page.rowStart + i, ms });
+        }
+      }
+      setLoadStatus(`Sampling ${src.name} for the zoomed window (${candidates.length.toLocaleString("en-US")} queries found)…`);
+      await yieldNow();
+    }
+
+    const matches = slack > 0
+      ? await dropNonOverlapping(src, candidates, fromMs, toMs, alive)
+      : candidates;
+    if (!matches) return null;
+
+    const inWindow = sampled && decodedPages
+      ? Math.round(matches.length * totalPages / decodedPages)
+      : matches.length;
+    const chosen = matches.length <= maxBars
+      ? matches
+      : await clusterSample(src, matches, maxBars, alive);
+    if (!chosen) return null;
+
+    const byGroup = new Map();
+    for (const { g, row } of chosen) {
+      if (!byGroup.has(g)) byGroup.set(g, []);
+      byGroup.get(g).push(row);
+    }
+    const intervals = [];
+    for (const [g, rows] of byGroup) {
+      if (!alive()) return null;
+      const part = await intervalsForRows(src, g, rows, alive);
+      if (!part) return null;
+      for (const iv of part) intervals.push(iv);
+    }
+    return { intervals, inWindow, exact: !sampled && matches.length <= maxBars };
+  }
+
+  function maxDurationMs(src) {
+    if (!src.durationName) return 0;
+    let max = 0;
+    for (const group of src.metadata.row_groups) {
+      const meta = metaFor(group, src.durationName);
+      const stats = meta && meta.statistics;
+      const value = stats ? asNumber(stats.max_value ?? stats.max) : null;
+      if (value == null) return 60 * 60 * 1000;
+      if (value > max) max = value;
+    }
+    return Math.min(max, 60 * 60 * 1000);
+  }
+
+  // Rows in the widened part of the window are kept only if their duration
+  // actually reaches into [fromMs, toMs].
+  async function dropNonOverlapping(src, candidates, fromMs, toMs, alive) {
+    const edge = new Map();
+    for (const cand of candidates) {
+      const outside = src.timeIsEnd ? cand.ms > toMs : cand.ms < fromMs;
+      if (!outside) continue;
+      if (!edge.has(cand.g)) edge.set(cand.g, []);
+      edge.get(cand.g).push(cand.row);
+    }
+    if (!edge.size) return candidates;
+    const durations = new Map();
+    for (const [g, rows] of edge) {
+      if (!alive()) return null;
+      const meta = metaFor(src.metadata.row_groups[g], src.durationName);
+      const pages = meta ? await pagesFor(src, g, src.durationName, alive) : null;
+      if (!pages) {
+        if (!alive()) return null;
+        continue;
+      }
+      const decoder = columnDecoderFor(src.schemaTree, src.durationName, meta, src.libs);
+      const values = await valuesForRows(src, g + ":" + src.durationName, pages, rows, decoder, alive);
+      if (!values) return null;
+      durations.set(g, values);
+    }
+    return candidates.filter(cand => {
+      const outside = src.timeIsEnd ? cand.ms > toMs : cand.ms < fromMs;
+      if (!outside) return true;
+      const duration = asNumber(durations.get(cand.g)?.get(cand.row)) || 0;
+      return src.timeIsEnd ? cand.ms - duration <= toMs : cand.ms + duration >= fromMs;
+    });
+  }
+
+  // Pick up to maxBars rows from a few hundred query-column pages, not from
+  // thousands: every distinct page is a separate decompression.
+  async function clusterSample(src, candidates, maxBars, alive) {
+    const buckets = [];
+    const anchorPages = new Map();
+    let current = null;
+    for (const cand of candidates) {
+      if (!anchorPages.has(cand.g)) {
+        const pages = await pagesFor(src, cand.g, src.anchorName, alive);
+        if (!pages) return null;
+        anchorPages.set(cand.g, dataPagesOf(pages));
+      }
+      const page = findDataPage(anchorPages.get(cand.g), cand.row);
+      const key = cand.g + ":" + (page ? page.rowStart : -1);
+      if (!current || current.key !== key) {
+        current = { key, items: [] };
+        buckets.push(current);
+      }
+      current.items.push(cand);
+    }
+    const maxPages = Math.max(1, Math.ceil(maxBars / 20));
+    const picked = pickIndexes(buckets.length, Math.min(buckets.length, maxPages)).map(i => buckets[i]);
+    const perBucket = Math.max(1, Math.ceil(maxBars / picked.length));
+    const out = [];
+    for (const bucket of picked) {
+      const take = Math.min(perBucket, bucket.items.length, maxBars - out.length);
+      if (take <= 0) break;
+      for (const i of pickIndexes(bucket.items.length, take)) out.push(bucket.items[i]);
+    }
+    return out;
+  }
+
+  async function parquetSourceFor(file, alive) {
+    if (file.__source) return file.__source;
+    let blob = file.__parquet;
+    if (file.__gzipWrapped) {
+      setLoadStatus(`Unpacking ${file.name}…`);
+      blob = await inflateGzipBlob(blob);
+      if (!alive()) return null;
+    }
+    const src = await openParquetSource(blob, file.name);
+    if (!alive()) return null;
+    file.__source = src;
+    return src;
+  }
+
+  async function readParquetFile(file, token) {
+    const alive = () => token === parseToken;
+    const src = await parquetSourceFor(file, alive);
+    if (!src) return null;
+    const intervals = await sampleWholeFile(src, alive);
+    if (!intervals) return null;
+    file.__sourceRows = src.total;
+    return intervals;
+  }
+
   function parseFiles(files) {
     const intervals = [];
 
@@ -731,8 +1469,10 @@
     if (applyingZoom) return;
     if (ed["xaxis.autorange"] === true) {
       if (!plotXRange) return;
+      cancelWindowQuery();
       plotXRange = null;
       renderPlot(intervals);
+      refreshSampleStatus();
       return;
     }
     const range = axisRangeFromRelayout(ed);
@@ -740,10 +1480,72 @@
     if (plotXRange
         && Math.abs(range.from - plotXRange.from) < 5
         && Math.abs(range.to - plotXRange.to) < 5) return;
-    const subset = intervalsOverlapping(intervals, range.from, range.to);
-    if (sameIntervals(subset, plottedIntervals)) return;
     plotXRange = range;
-    renderPlot(subset, plotXRange);
+    const subset = intervalsOverlapping(intervals, range.from, range.to);
+    if (!sameIntervals(subset, plottedIntervals)) renderPlot(subset, plotXRange);
+    scheduleWindowQuery(range);
+  }
+
+  let windowToken = 0;
+  let windowTimer = null;
+
+  function cancelWindowQuery() {
+    windowToken++;
+    clearTimeout(windowTimer);
+  }
+
+  function scheduleWindowQuery(range) {
+    cancelWindowQuery();
+    if (!loadedFiles.some(file => file.__source)) return;
+    setLoadStatus("Sampling the zoomed window…");
+    const token = windowToken;
+    windowTimer = setTimeout(() => runWindowQuery(range, token), 250);
+  }
+
+  async function runWindowQuery(range, token) {
+    const alive = () => token === windowToken && plotXRange === range;
+    const parts = [];
+    const notes = [];
+    try {
+      for (const file of loadedFiles) {
+        if (!file.__source) {
+          if (file.__intervals) parts.push(file.__intervals);
+          continue;
+        }
+        const res = await sampleWindow(file.__source, range.from, range.to, alive);
+        if (!res || !alive()) return;
+        parts.push(res.intervals);
+        notes.push(res.exact
+          ? `${file.name}: all ${res.intervals.length.toLocaleString("en-US")} queries in this window`
+          : `${file.name}: ${res.intervals.length.toLocaleString("en-US")} of ~${res.inWindow.toLocaleString("en-US")} in this window sampled`);
+      }
+    } catch (err) {
+      if (!alive()) return;
+      toast("Could not resample the window");
+      setLoadStatus(err && err.message ? err.message : "Could not resample the window");
+      return;
+    }
+    if (!alive()) return;
+    const compiled = compileQueryFilter(cypherFilter.value);
+    const all = parts.flat().sort((a, b) => a.start - b.start);
+    const filtered = filterIntervals(all, compiled.error ? null : compiled.re, getTimeRange());
+    renderPlot(intervalsOverlapping(filtered, range.from, range.to), range);
+    setLoadStatus(notes.join(" · ") + ". Double-click the plot to go back to the whole file.");
+  }
+
+  // Millisecond queries over a multi-day window are narrower than a pixel and
+  // would not be drawn. Hover still reports the real duration.
+  function minVisibleBarMs(list, xLock) {
+    let from = xLock ? xLock.from : Infinity;
+    let to = xLock ? xLock.to : -Infinity;
+    if (!xLock) {
+      for (const iv of list) {
+        from = Math.min(from, iv.start.getTime());
+        to = Math.max(to, iv.end.getTime());
+      }
+    }
+    const span = to - from;
+    return Number.isFinite(span) && span > 0 ? span / 1500 : 0;
   }
 
   function renderPlot(list, xLock) {
@@ -769,7 +1571,8 @@
 
     const y = plottedIntervals.map((iv, i) => yKeyFor(iv, i));
     const base = plottedIntervals.map(iv => formatUtcWallClock(iv.start));
-    const x = plottedIntervals.map(iv => Math.max(0, iv.end - iv.start));
+    const minBarMs = minVisibleBarMs(plottedIntervals, xLock);
+    const x = plottedIntervals.map(iv => Math.max(minBarMs, iv.end - iv.start));
     const colorMap = colorMapFor(plottedIntervals);
     renderColorLegend(colorMap);
 
@@ -888,6 +1691,7 @@
   const chartEl = document.getElementById("chart");
 
   let loadedFiles = [];
+  let parseToken = 0;
   let allIntervals = [];
   let intervals = [];
   let plottedIntervals = [];
@@ -947,12 +1751,34 @@
     container.appendChild(note);
   }
 
+  async function classifyDroppedFile(file) {
+    const name = file.name || "log";
+    let magic = new Uint8Array();
+    if (typeof file.slice === "function") {
+      const head = await readBlob(file.slice(0, 4));
+      magic = new Uint8Array(head);
+    }
+    const namedParquet = isParquetFileName(name);
+    if (looksLikeParquetMagic(magic) || (namedParquet && !looksLikeGzipMagic(magic))) {
+      return { name, __parquet: file, __gzipWrapped: false };
+    }
+    if (looksLikeGzipMagic(magic) && namedParquet) {
+      return { name, __parquet: file, __gzipWrapped: true };
+    }
+    if (namedParquet) throw new Error("Could not read that file as Parquet.");
+    return null;
+  }
+
   async function loadFiles(fileList) {
     const files = Array.from(fileList || []);
     for (const f of files) {
+      const parquet = await classifyDroppedFile(f);
+      if (parquet) {
+        // Keep a plain record. File objects from the picker are not always extensible.
+        loadedFiles.push(parquet);
+        continue;
+      }
       const text = await f.text();
-      // Keep a plain record. File objects from the picker are not always extensible,
-      // and Object.assign(file, {__text}) then throws before anything is parsed.
       loadedFiles.push({ name: f.name || "log", __text: text });
     }
     fileCount.textContent = String(loadedFiles.length);
@@ -961,7 +1787,7 @@
   async function ingestFiles(fileList) {
     try {
       await loadFiles(fileList);
-      parseAndRender();
+      await parseAndRender();
     } catch (err) {
       const msg = err && err.message ? err.message : "Could not read that file.";
       toast(msg);
@@ -996,10 +1822,49 @@
       : filteredNote;
   }
 
-  function parseAndRender() {
-    allIntervals = parseFiles(loadedFiles);
-    applyDataBoundsToPickers(allIntervals);
-    applyFilterAndRender(true, true);
+  async function collectIntervals(token) {
+    const parts = [];
+    for (const file of loadedFiles) {
+      if (token !== parseToken) return null;
+      if (file.__intervals) {
+        parts.push(file.__intervals);
+        continue;
+      }
+      if (file.__text != null) {
+        file.__intervals = parseFiles([file]);
+        parts.push(file.__intervals);
+        continue;
+      }
+      if (file.__parquet) {
+        const msg = `Reading ${file.name}…`;
+        setLoadStatus(msg);
+        showChartMessage(msg, false);
+        const intervals = await readParquetFile(file, token);
+        if (!intervals || token !== parseToken) return null;
+        file.__intervals = intervals;
+        parts.push(intervals);
+      }
+    }
+    const all = parts.flat();
+    all.sort((a, b) => a.start - b.start);
+    return all;
+  }
+
+  async function parseAndRender() {
+    const token = ++parseToken;
+    try {
+      const all = await collectIntervals(token);
+      if (all == null || token !== parseToken) return;
+      allIntervals = all;
+      applyDataBoundsToPickers(allIntervals);
+      applyFilterAndRender(true, true);
+      refreshSampleStatus();
+    } catch (err) {
+      if (token !== parseToken) return;
+      const msg = err && err.message ? err.message : "Could not read that file.";
+      toast(msg);
+      showChartMessage(msg, true);
+    }
   }
 
   drop.addEventListener("click", () => fileInput.click());
@@ -1034,12 +1899,14 @@
     }
   });
   clearBtn.addEventListener("click", () => {
+    parseToken++;
     loadedFiles = [];
     allIntervals = [];
     intervals = [];
     plotXRange = null;
     fileCount.textContent = "0";
     intervalCount.textContent = "0";
+    setLoadStatus("");
     if (fpFrom) fpFrom.clear();
     if (fpTo) fpTo.clear();
     renderPlot([]);

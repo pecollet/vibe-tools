@@ -89,11 +89,13 @@ function logFile(text, name = 'query.log.004') {
 }
 
 async function dropText(window, text, name = 'query.log.004') {
+  await dropFiles(window, [logFile(text, name)]);
+}
+
+async function dropFiles(window, files) {
   const drop = window.document.getElementById('drop');
   const event = new window.Event('drop', { bubbles: true, cancelable: true });
-  Object.defineProperty(event, 'dataTransfer', {
-    value: { files: [logFile(text, name)] },
-  });
+  Object.defineProperty(event, 'dataTransfer', { value: { files } });
   drop.dispatchEvent(event);
   await flush();
 }
@@ -117,6 +119,7 @@ module.exports = {
   snippet,
   timestampCount,
   dropText,
+  dropFiles,
   logFile,
   flush,
   lastPlot,
